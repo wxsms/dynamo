@@ -1485,6 +1485,7 @@ index 000000000..bd4ac984e
 +                    raise RuntimeError("Transfer failed with state %s", xfer_state)
 +            if len(running_reqs) == 0:
 +                done_req_ids.append(req_id)
++                del self._transfers[req_id]
 +            else:
 +                self._transfers[req_id] = running_reqs
 +        return done_req_ids
@@ -2987,7 +2988,7 @@ index 54f7b8fb6..0559f9db2 100644
 +            self._nixl_agents_names = self._initialize_nixl()
 +
 +        self._request_notif_counter = defaultdict(lambda: -self.parallel_config.tensor_parallel_size)
-+        self._request_done_counter = defaultdict(lambda: -self.parallel_config.tensor_parallel_size)
++        self._request_done_counter = defaultdict(lambda: -1)
 +        self._finished_prefills = set()
 +        self._finished_transfers = set()
 +
