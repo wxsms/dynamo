@@ -29,6 +29,7 @@ from vllm.engine.arg_utils import AsyncEngineArgs
 from vllm.entrypoints.openai.protocol import ChatCompletionRequest, CompletionRequest
 from vllm.outputs import RequestOutput
 from vllm.transformers_utils.tokenizer import AnyTokenizer
+from utils.ns import get_namespace
 
 from dynamo.llm import KvMetricsAggregator
 from dynamo.runtime import EtcdKvCache
@@ -45,7 +46,7 @@ class RequestType(Enum):
 @service(
     dynamo={
         "enabled": True,
-        "namespace": "dynamo",
+        "namespace": get_namespace(),
     },
     resources={"cpu": "10", "memory": "20Gi"},
     workers=1,
@@ -112,7 +113,7 @@ class Processor(ProcessMixIn):
 
         self.etcd_kv_cache = await EtcdKvCache.create(
             runtime.etcd_client(),
-            "/dynamo/processor/",
+            f"/{get_namespace()}/processor/",
             {"router": self.engine_args.router},
         )
 

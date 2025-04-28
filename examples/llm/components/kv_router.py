@@ -24,6 +24,7 @@ from components.worker import VllmWorker
 from utils.logging import check_required_workers
 from utils.protocol import Tokens
 from vllm.logger import logger as vllm_logger
+from utils.ns import get_namespace
 
 from dynamo.llm import AggregatedMetrics, KvIndexer, KvMetricsAggregator, OverlapScores
 from dynamo.sdk import async_on_start, depends, dynamo_context, dynamo_endpoint, service
@@ -70,7 +71,7 @@ def parse_args(service_name, prefix) -> Namespace:
 @service(
     dynamo={
         "enabled": True,
-        "namespace": "dynamo",
+        "namespace": get_namespace(),
     },
     resources={"cpu": "10", "memory": "20Gi"},
     workers=1,
@@ -96,7 +97,7 @@ class Router:
     async def async_init(self):
         self.runtime = dynamo_context["runtime"]
         self.workers_client = (
-            await self.runtime.namespace("dynamo")
+            await self.runtime.namespace(get_namespace())
             .component("VllmWorker")
             .endpoint("generate")
             .client()
@@ -104,7 +105,7 @@ class Router:
 
         await check_required_workers(self.workers_client, self.args.min_workers)
 
-        kv_listener = self.runtime.namespace("dynamo").component("VllmWorker")
+        kv_listener = self.runtime.namespace(get_namespace()).component("VllmWorker")
         await kv_listener.create_service()
         self.indexer = KvIndexer(kv_listener, self.args.block_size)
         self.metrics_aggregator = KvMetricsAggregator(kv_listener)

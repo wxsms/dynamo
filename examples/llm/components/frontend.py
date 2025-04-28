@@ -26,6 +26,7 @@ from dynamo import sdk
 from dynamo.sdk import async_on_shutdown, depends, service
 from dynamo.sdk.lib.config import ServiceConfig
 from dynamo.sdk.lib.image import DYNAMO_IMAGE
+from utils.ns import get_namespace
 
 logger = logging.getLogger(__name__)
 
@@ -44,7 +45,6 @@ class FrontendConfig(BaseModel):
     """Configuration for the Frontend service including model and HTTP server settings."""
 
     served_model_name: str
-    endpoint: str
     port: int = 8080
 
 
@@ -92,7 +92,7 @@ class Frontend:
                 "add",
                 "chat-models",
                 self.frontend_config.served_model_name,
-                self.frontend_config.endpoint,
+                f"{get_namespace()}.Processor.chat/completions",
             ],
             check=False,
         )
