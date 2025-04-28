@@ -28,7 +28,7 @@ class PyDisaggregatedRouter:
         served_model_name,
         max_local_prefill_length=1000,
         max_prefill_queue_size=2,
-        must_remote_prefill_length=0
+        must_remote_prefill_length=0,
     ):
         self.runtime = runtime
         self.served_model_name = served_model_name
@@ -61,7 +61,10 @@ class PyDisaggregatedRouter:
             await self.etcd_kv_cache.get("must_remote_prefill_length")
         )
         absolute_prefill_length = int(prompt_length * (1 - prefix_hit_rate))
-        must_remote_prefill = must_remote_prefill_length > 0 and absolute_prefill_length > must_remote_prefill_length
+        must_remote_prefill = (
+            must_remote_prefill_length > 0
+            and absolute_prefill_length > must_remote_prefill_length
+        )
         # TODO: consider size of each request in the queue when making the decision
         decision = must_remote_prefill or (
             absolute_prefill_length > max_local_prefill_length
