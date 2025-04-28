@@ -23,13 +23,13 @@ from components.worker import VllmWorker
 from transformers import AutoTokenizer
 from utils.chat_processor import ChatProcessor, CompletionsProcessor, ProcessMixIn
 from utils.logging import check_required_workers
+from utils.ns import get_namespace
 from utils.protocol import MyRequestOutput, Tokens, vLLMGenerateRequest
 from utils.vllm import RouterType, parse_vllm_args
 from vllm.engine.arg_utils import AsyncEngineArgs
 from vllm.entrypoints.openai.protocol import ChatCompletionRequest, CompletionRequest
 from vllm.outputs import RequestOutput
 from vllm.transformers_utils.tokenizer import AnyTokenizer
-from utils.ns import get_namespace
 
 from dynamo.llm import KvMetricsAggregator
 from dynamo.runtime import EtcdKvCache

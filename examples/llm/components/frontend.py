@@ -21,12 +21,12 @@ from components.processor import Processor
 from components.worker import VllmWorker
 from fastapi import FastAPI
 from pydantic import BaseModel
+from utils.ns import get_namespace
 
 from dynamo import sdk
 from dynamo.sdk import async_on_shutdown, depends, service
 from dynamo.sdk.lib.config import ServiceConfig
 from dynamo.sdk.lib.image import DYNAMO_IMAGE
-from utils.ns import get_namespace
 
 logger = logging.getLogger(__name__)
 

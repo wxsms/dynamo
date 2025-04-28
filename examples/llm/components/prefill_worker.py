@@ -21,6 +21,7 @@ import sys
 
 from pydantic import BaseModel
 from utils.nixl import NixlMetadataStore
+from utils.ns import get_namespace
 from utils.prefill_queue import PrefillQueue
 from utils.vllm import parse_vllm_args
 from vllm.entrypoints.openai.api_server import (
@@ -31,7 +32,6 @@ from vllm.remote_prefill import RemotePrefillParams, RemotePrefillRequest
 
 from dynamo.sdk import async_on_start, dynamo_context, dynamo_endpoint, service
 from dynamo.sdk.lib.service import LeaseConfig
-from utils.ns import get_namespace
 
 logger = logging.getLogger(__name__)
 
@@ -119,10 +119,14 @@ class PrefillWorker:
     async def prefill_queue_handler(self):
         logger.info("Prefill queue handler entered")
         prefill_queue_nats_server = os.getenv("NATS_SERVER", "nats://localhost:4222")
-        prefill_queue_stream_name = get_namespace() + '_' + (
-            self.engine_args.served_model_name
-            if self.engine_args.served_model_name is not None
-            else "vllm"
+        prefill_queue_stream_name = (
+            get_namespace()
+            + "_"
+            + (
+                self.engine_args.served_model_name
+                if self.engine_args.served_model_name is not None
+                else "vllm"
+            )
         )
         logger.info(
             f"Prefill queue: {prefill_queue_nats_server}:{prefill_queue_stream_name}"

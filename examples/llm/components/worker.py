@@ -22,6 +22,7 @@ import signal
 from components.disagg_router import PyDisaggregatedRouter
 from components.prefill_worker import PrefillWorker
 from utils.nixl import NixlMetadataStore
+from utils.ns import get_namespace
 from utils.prefill_queue import PrefillQueue
 from utils.protocol import MyRequestOutput, vLLMGenerateRequest
 from utils.vllm import RouterType, parse_vllm_args
@@ -34,7 +35,6 @@ from vllm.sampling_params import RequestOutputKind
 from dynamo.llm import KvMetricsPublisher
 from dynamo.sdk import async_on_start, depends, dynamo_context, dynamo_endpoint, service
 from dynamo.sdk.lib.service import LeaseConfig
-from utils.ns import get_namespace
 
 logger = logging.getLogger(__name__)
 
@@ -65,7 +65,7 @@ class VllmWorker:
         self._prefill_queue_nats_server = os.getenv(
             "NATS_SERVER", "nats://localhost:4222"
         )
-        self._prefill_queue_stream_name = get_namespace() + '_' + self.model_name
+        self._prefill_queue_stream_name = get_namespace() + "_" + self.model_name
         logger.info(
             f"Prefill queue: {self._prefill_queue_nats_server}:{self._prefill_queue_stream_name}"
         )

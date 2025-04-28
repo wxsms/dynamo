@@ -15,9 +15,10 @@
 
 import logging
 
+from utils.ns import get_namespace
+
 from dynamo.runtime import EtcdKvCache
 from dynamo.sdk import dynamo_context
-from utils.ns import get_namespace
 
 logger = logging.getLogger(__name__)
 

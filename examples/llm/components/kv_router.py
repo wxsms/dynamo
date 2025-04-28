@@ -22,9 +22,9 @@ from typing import AsyncIterator
 
 from components.worker import VllmWorker
 from utils.logging import check_required_workers
+from utils.ns import get_namespace
 from utils.protocol import Tokens
 from vllm.logger import logger as vllm_logger
-from utils.ns import get_namespace
 
 from dynamo.llm import AggregatedMetrics, KvIndexer, KvMetricsAggregator, OverlapScores
 from dynamo.sdk import async_on_start, depends, dynamo_context, dynamo_endpoint, service
