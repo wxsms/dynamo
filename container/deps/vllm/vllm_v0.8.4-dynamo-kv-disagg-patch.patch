@@ -1485,9 +1485,10 @@ index 000000000..bd4ac984e
 +                    raise RuntimeError("Transfer failed with state %s", xfer_state)
 +            if len(running_reqs) == 0:
 +                done_req_ids.append(req_id)
-+                del self._transfers[req_id]
 +            else:
 +                self._transfers[req_id] = running_reqs
++        for req_id in done_req_ids:
++            del self._transfers[req_id]
 +        return done_req_ids
 diff --git a/vllm/distributed/kv_transfer/kv_connector/dynamo_connector.py b/vllm/distributed/kv_transfer/kv_connector/dynamo_connector.py
 new file mode 100644
