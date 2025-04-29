@@ -20,7 +20,6 @@ import os
 import signal
 
 from components.disagg_router import PyDisaggregatedRouter
-from components.prefill_worker import PrefillWorker
 from utils.nixl import NixlMetadataStore
 from utils.prefill_queue import PrefillQueue
 from utils.protocol import MyRequestOutput, vLLMGenerateRequest
@@ -48,8 +47,6 @@ logger = logging.getLogger(__name__)
     workers=1,
 )
 class VllmWorker:
-    prefill_worker = depends(PrefillWorker)
-
     def __init__(self):
         self.client = None
         self.disaggregated_router: PyDisaggregatedRouter = None  # type: ignore
