@@ -359,9 +359,22 @@ pub struct ClientOptions {
 
 impl Default for ClientOptions {
     fn default() -> Self {
+        let mut connect_options = None;
+
+        // check for username and passwords
+        if let (Ok(username), Ok(password)) = (
+            std::env::var("ETCD_USERNAME"),
+            std::env::var("ETCD_PASSWORD")
+        ) {
+            connect_options = Some(
+                ConnectOptions::new()
+                    .with_user(username, password)
+            );
+        }
+
         ClientOptions {
             etcd_url: default_servers(),
-            etcd_connect_options: None,
+            etcd_connect_options: connect_options,
             attach_lease: true,
         }
     }
