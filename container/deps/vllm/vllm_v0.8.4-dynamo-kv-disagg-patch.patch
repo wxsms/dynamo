@@ -2989,7 +2989,7 @@ index 54f7b8fb6..0559f9db2 100644
 +            self._nixl_agents_names = self._initialize_nixl()
 +
 +        self._request_notif_counter = defaultdict(lambda: -self.parallel_config.tensor_parallel_size)
-+        self._request_done_counter = defaultdict(lambda: -1)
++        self._request_done_counter = defaultdict(lambda: -self.parallel_config.tensor_parallel_size)
 +        self._finished_prefills = set()
 +        self._finished_transfers = set()
 +
