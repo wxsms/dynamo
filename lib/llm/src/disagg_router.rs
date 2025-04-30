@@ -39,8 +39,7 @@ impl DisaggRouterConf {
         drt: Arc<DistributedRuntime>,
         model_name: &str,
     ) -> anyhow::Result<(Self, watch::Receiver<Self>)> {
-        let namespace = std::env::var("DYN_NAMESPACE").unwrap_or_else(|_| "dynamo".to_string());
-        let etcd_key = format!("{}/public/components/disagg_router/models/chat/{}", namespace, model_name);
+        let etcd_key = format!("public/components/disagg_router/models/chat/{}", model_name);
 
         // Get the initial value if it exists
         let Some(etcd_client) = drt.etcd_client() else {

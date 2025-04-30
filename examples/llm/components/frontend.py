@@ -52,7 +52,7 @@ class FrontendConfig(BaseModel):
 @service(
     dynamo={
         "enabled": True,
-        "namespace": "dynamo",
+        "namespace": get_namespace(),
     },
     resources={"cpu": "10", "memory": "20Gi"},
     workers=1,
@@ -78,6 +78,8 @@ class Frontend:
         subprocess.run(
             [
                 "llmctl",
+                "-n",
+                get_namespace(),
                 "http",
                 "remove",
                 "chat-models",
@@ -88,6 +90,8 @@ class Frontend:
         subprocess.run(
             [
                 "llmctl",
+                "-n",
+                get_namespace(),
                 "http",
                 "add",
                 "chat-models",
@@ -103,7 +107,13 @@ class Frontend:
         http_binary = get_http_binary_path()
 
         self.process = subprocess.Popen(
-            [http_binary, "-p", str(self.frontend_config.port)],
+            [
+                http_binary,
+                "-p",
+                str(self.frontend_config.port),
+                "--namespace",
+                get_namespace(),
+            ],
             stdout=None,
             stderr=None,
         )
@@ -116,6 +126,8 @@ class Frontend:
         subprocess.run(
             [
                 "llmctl",
+                "-n",
+                get_namespace(),
                 "http",
                 "remove",
                 "chat-models",
