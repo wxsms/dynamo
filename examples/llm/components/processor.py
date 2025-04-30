@@ -107,7 +107,7 @@ class Processor(ProcessMixIn):
 
         await check_required_workers(self.worker_client, self.min_workers)
 
-        kv_listener = runtime.namespace("dynamo").component("VllmWorker")
+        kv_listener = runtime.namespace(get_namespace()).component("VllmWorker")
         await kv_listener.create_service()
         self.metrics_aggregator = KvMetricsAggregator(kv_listener)
 
