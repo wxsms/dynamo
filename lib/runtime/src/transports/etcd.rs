@@ -24,9 +24,7 @@ use std::sync::Arc;
 use tokio::sync::{mpsc, RwLock};
 use validator::Validate;
 
-use etcd_client::{
-    Compare, CompareOp, GetOptions, PutOptions, Txn, TxnOp, TxnOpResponse, WatchOptions, Watcher,
-};
+use etcd_client::{Certificate, Compare, CompareOp, GetOptions, Identity, PutOptions, TlsOptions, Txn, TxnOp, TxnOpResponse, WatchOptions, Watcher};
 
 pub use etcd_client::{ConnectOptions, KeyValue, LeaseClient};
 
@@ -361,14 +359,28 @@ impl Default for ClientOptions {
     fn default() -> Self {
         let mut connect_options = None;
 
-        // check for username and passwords
         if let (Ok(username), Ok(password)) = (
-            std::env::var("ETCD_USERNAME"),
-            std::env::var("ETCD_PASSWORD")
+            std::env::var("ETCD_AUTH_USERNAME"),
+            std::env::var("ETCD_AUTH_PASSWORD")
         ) {
+            // username and password are set
             connect_options = Some(
                 ConnectOptions::new()
                     .with_user(username, password)
+            );
+        } else if let (Ok(ca), Ok(cert), Ok(key)) = (
+            std::env::var("ETCD_AUTH_CA"),
+            std::env::var("ETCD_AUTH_CLIENT_CERT"),
+            std::env::var("ETCD_AUTH_CLIENT_KEY"),
+        ) {
+            // TLS is set
+            connect_options = Some(
+                ConnectOptions::new()
+                    .with_tls(
+                        TlsOptions::new()
+                            .ca_certificate(Certificate::from_pem(ca))
+                            .identity(Identity::from_pem(cert, key)),
+                    )
             );
         }
 
