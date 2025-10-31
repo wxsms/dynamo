@@ -6,9 +6,6 @@ kind: DynamoGraphDeployment
 metadata:
   name: sglang-agg
 spec:
-  envs:
-  - name: DYN_LOGGING_JSONL
-    value: "1"
   services:
     Frontend:
       dynamoNamespace: sglang-agg
@@ -28,7 +25,7 @@ spec:
       extraPodSpec:
         mainContainer:
           image: my-registry/sglang-runtime:my-tag
-          workingDir: /workspace/components/backends/sglang
+          workingDir: /workspace/examples/backends/sglang
           command:
           - python3
           - -m
@@ -44,3 +41,4 @@ spec:
             - "1"
             - --trust-remote-code
             - --skip-tokenizer-init
+
