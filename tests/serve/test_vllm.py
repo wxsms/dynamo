@@ -326,6 +326,22 @@ vllm_configs = {
     #     delayed_start=45,
     #     script_args=["--model", "llava-hf/llava-1.5-7b-hf"],
     # ),
+    "completions_only": VLLMConfig(
+        name="completions_only",
+        directory=vllm_dir,
+        script_name="agg.sh",
+        marks=[pytest.mark.gpu_1],
+        model="deepseek-ai/deepseek-llm-7b-base",
+        script_args=[
+            "--model",
+            "deepseek-ai/deepseek-llm-7b-base",
+            "--dyn-endpoint-types",
+            "completions",
+        ],
+        request_payloads=[
+            completion_payload_default(),
+        ],
+    ),
 }
 
 
