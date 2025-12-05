@@ -74,6 +74,9 @@ pub struct DistributedRuntime {
 
     // This hierarchy's own metrics registry
     metrics_registry: MetricsRegistry,
+
+    // Registry for /engine/* route callbacks
+    engine_routes: crate::engine_routes::EngineRouteRegistry,
 }
 
 impl MetricsHierarchy for DistributedRuntime {
@@ -197,6 +200,7 @@ impl DistributedRuntime {
             system_health,
             request_plane,
             local_endpoint_registry: crate::local_endpoint_registry::LocalEndpointRegistry::new(),
+            engine_routes: crate::engine_routes::EngineRouteRegistry::new(),
         };
 
         // Initialize the uptime gauge in SystemHealth
@@ -305,6 +309,11 @@ impl DistributedRuntime {
         &self,
     ) -> &crate::local_endpoint_registry::LocalEndpointRegistry {
         &self.local_endpoint_registry
+    }
+
+    /// Get the engine route registry for registering custom /engine/* routes
+    pub fn engine_routes(&self) -> &crate::engine_routes::EngineRouteRegistry {
+        &self.engine_routes
     }
 
     pub fn connection_id(&self) -> u64 {
