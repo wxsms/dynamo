@@ -678,7 +678,6 @@ RUN --mount=type=bind,source=./container/deps/requirements.txt,target=/tmp/requi
 
 # Copy tests, deploy and components for CI with correct ownership
 # Pattern: COPY --chmod=775 <path>; chmod g+w <path> done later as root because COPY --chmod only affects <path>/*, not <path>
-COPY --chmod=775 --chown=dynamo:0 pyproject.toml /workspace/
 COPY --chmod=775 --chown=dynamo:0 tests /workspace/tests
 COPY --chmod=775 --chown=dynamo:0 examples /workspace/examples
 COPY --chmod=775 --chown=dynamo:0 deploy /workspace/deploy

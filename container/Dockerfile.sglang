@@ -680,7 +680,6 @@ COPY --chmod=664 --chown=dynamo:0 ATTRIBUTION* LICENSE /workspace/
 
 # Copy tests, benchmarks, deploy and components for CI with correct ownership
 # Pattern: COPY --chmod=775 <path>; chmod g+w <path> done later as root because COPY --chmod only affects <path>/*, not <path>
-COPY --chmod=775 --chown=dynamo:0 pyproject.toml /workspace/
 COPY --chmod=775 --chown=dynamo:0 tests /workspace/tests
 COPY --chmod=775 --chown=dynamo:0 examples /workspace/examples
 COPY --chmod=775 --chown=dynamo:0 benchmarks /workspace/benchmarks
