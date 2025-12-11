@@ -330,6 +330,9 @@ impl<'de> Deserialize<'de> for ExternalSequenceBlockHash {
     }
 }
 
+// ------
+// Tests
+// ------
 #[cfg(test)]
 mod tests {
     use super::*;
