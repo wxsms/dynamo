@@ -124,23 +124,6 @@ async def init(runtime: DistributedRuntime, config: Config):
         await _handle_non_leader_node(engine, generate_endpoint)
         return
 
-    # Register engine routes for profiling
-    async def start_profile_handler(body: dict) -> dict:
-        """Handle /engine/start_profile requests"""
-        await engine.tokenizer_manager.start_profile(**body)
-        return {"status": "ok", "message": "Profiling started"}
-
-    async def stop_profile_handler(body: dict) -> dict:
-        """Handle /engine/stop_profile requests"""
-        await engine.tokenizer_manager.stop_profile()
-        return {"status": "ok", "message": "Profiling stopped"}
-
-    runtime.register_engine_route("start_profile", start_profile_handler)
-    runtime.register_engine_route("stop_profile", stop_profile_handler)
-    logging.info(
-        "Registered engine routes: /engine/start_profile, /engine/stop_profile"
-    )
-
     # publisher instantiates the metrics and kv event publishers
     publisher, metrics_task, metrics_labels = await setup_sgl_metrics(
         engine, config, component, generate_endpoint
@@ -156,17 +139,7 @@ async def init(runtime: DistributedRuntime, config: Config):
     handler = DecodeWorkerHandler(
         component, engine, config, publisher, generate_endpoint
     )
-
-    # Register memory management routes using handler methods
-    runtime.register_engine_route(
-        "release_memory_occupation", handler.release_memory_occupation
-    )
-    runtime.register_engine_route(
-        "resume_memory_occupation", handler.resume_memory_occupation
-    )
-    logging.info(
-        "Registered engine routes: /engine/release_memory_occupation, /engine/resume_memory_occupation"
-    )
+    handler.register_engine_routes(runtime)
 
     print(f"Config: {config}")
     health_check_payload = SglangHealthCheckPayload(
@@ -238,23 +211,6 @@ async def init_prefill(runtime: DistributedRuntime, config: Config):
         await _handle_non_leader_node(engine, generate_endpoint)
         return
 
-    # Register engine routes for profiling
-    async def start_profile_handler(body: dict) -> dict:
-        """Handle /engine/start_profile requests"""
-        await engine.tokenizer_manager.start_profile(**body)
-        return {"status": "ok", "message": "Profiling started"}
-
-    async def stop_profile_handler(body: dict) -> dict:
-        """Handle /engine/stop_profile requests"""
-        await engine.tokenizer_manager.stop_profile()
-        return {"status": "ok", "message": "Profiling stopped"}
-
-    runtime.register_engine_route("start_profile", start_profile_handler)
-    runtime.register_engine_route("stop_profile", stop_profile_handler)
-    logging.info(
-        "Registered engine routes: /engine/start_profile, /engine/stop_profile"
-    )
-
     # Perform dummy warmup for prefill worker to avoid initial TTFT hit
     # Only needed on leader node that handles requests
     await _warmup_prefill_engine(engine, server_args)
@@ -271,17 +227,7 @@ async def init_prefill(runtime: DistributedRuntime, config: Config):
     handler = PrefillWorkerHandler(
         component, engine, config, publisher, generate_endpoint
     )
-
-    # Register memory management routes using handler methods
-    runtime.register_engine_route(
-        "release_memory_occupation", handler.release_memory_occupation
-    )
-    runtime.register_engine_route(
-        "resume_memory_occupation", handler.resume_memory_occupation
-    )
-    logging.info(
-        "Registered engine routes: /engine/release_memory_occupation, /engine/resume_memory_occupation"
-    )
+    handler.register_engine_routes(runtime)
 
     health_check_payload = SglangPrefillHealthCheckPayload(engine).to_dict()
 
