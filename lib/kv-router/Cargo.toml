@@ -14,9 +14,10 @@ repository.workspace = true
 default = []
 metrics = ["dep:dynamo-runtime"]
 bench = ["dep:clap", "dep:indicatif", "dep:serde_json", "dep:plotters"]
-standalone-indexer = ["metrics", "dep:axum", "dep:bytes", "dep:zeromq", "dep:serde_json", "dep:reqwest"]
+standalone-indexer = ["dep:axum", "dep:bytes", "dep:zeromq", "dep:serde_json", "dep:reqwest"]
 indexer-bin = ["standalone-indexer", "dep:clap", "dep:tracing-subscriber"]
 test-endpoints = ["indexer-bin"]
+indexer-runtime = ["metrics", "standalone-indexer"]
 
 [dependencies]
 # repo
@@ -57,8 +58,9 @@ rustc-hash = "2.1.1"
 axum = { workspace = true, optional = true }
 bytes = { workspace = true, optional = true }
 reqwest = { workspace = true, optional = true }
-zeromq = { version = "0.4.1", optional = true }
 tracing-subscriber = { workspace = true, optional = true }
+zeromq = { version = "0.4.1", optional = true }
+
 
 [package.metadata.cargo-machete]
 ignored = ["indicatif", "plotters"]
@@ -67,7 +69,7 @@ ignored = ["indicatif", "plotters"]
 rstest = "0.18.2"
 rstest_reuse = "0.7.0"
 serde_json = { workspace = true }
-tokio = { workspace = true, features = ["rt", "macros", "time"] }
+tokio = { workspace = true, features = ["rt", "macros", "time", "test-util"] }
 dynamo-tokens = { workspace = true }
 
 [[bin]]
