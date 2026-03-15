@@ -4,7 +4,6 @@
 use std::sync::Arc;
 
 use dynamo_runtime::stream::StreamExt;
-
 use dynamo_runtime::{
     DistributedRuntime,
     discovery::{
@@ -14,10 +13,8 @@ use dynamo_runtime::{
 use serde::Deserialize;
 use tokio_util::sync::CancellationToken;
 
-use dynamo_kv_router::standalone_indexer::registry::WorkerRegistry;
+use crate::standalone_indexer::registry::WorkerRegistry;
 
-/// Minimal subset of ModelDeploymentCard — only the fields the indexer needs.
-/// Using `#[serde(default)]` on optional fields lets us safely ignore the rest.
 #[derive(Deserialize, Debug)]
 struct PartialModelCard {
     pub display_name: String,
@@ -25,8 +22,6 @@ struct PartialModelCard {
     pub kv_cache_block_size: u32,
 }
 
-/// Spawn a background task that watches MDC discovery for worker additions/removals
-/// and updates the WorkerRegistry accordingly.
 pub async fn spawn_discovery_watcher(
     drt: &DistributedRuntime,
     registry: Arc<WorkerRegistry>,
@@ -71,7 +66,6 @@ pub async fn spawn_discovery_watcher(
 
                     let model_name = card.display_name.clone();
                     let block_size = card.kv_cache_block_size;
-                    // Use the Dynamo namespace as the tenant_id
                     let tenant_id = namespace;
 
                     if block_size == 0 {
@@ -91,7 +85,7 @@ pub async fn spawn_discovery_watcher(
                         "Discovery: adding worker"
                     );
 
-                    if let Err(e) = registry.add_worker_from_discovery(
+                    if let Err(err) = registry.add_worker_from_discovery(
                         instance_id,
                         model_name.clone(),
                         tenant_id,
@@ -100,7 +94,7 @@ pub async fn spawn_discovery_watcher(
                         tracing::error!(
                             instance_id,
                             model_name,
-                            error = %e,
+                            error = %err,
                             "Failed to add discovered worker"
                         );
                     }

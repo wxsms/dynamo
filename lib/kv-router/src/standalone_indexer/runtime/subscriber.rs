@@ -10,12 +10,9 @@ use dynamo_runtime::{
     DistributedRuntime, discovery::EventTransportKind, transports::event_plane::EventSubscriber,
 };
 
-use dynamo_kv_router::protocols::{KV_EVENT_SUBJECT, RouterEvent};
+use crate::protocols::{KV_EVENT_SUBJECT, RouterEvent};
+use crate::standalone_indexer::registry::WorkerRegistry;
 
-use dynamo_kv_router::standalone_indexer::registry::WorkerRegistry;
-
-/// Spawn a background task that subscribes to KV events from the worker component
-/// via the event plane and applies them to the appropriate indexer in the registry.
 pub async fn spawn_event_subscriber(
     drt: &DistributedRuntime,
     namespace: &str,
@@ -24,10 +21,7 @@ pub async fn spawn_event_subscriber(
     cancel_token: CancellationToken,
 ) -> Result<()> {
     let transport_kind = EventTransportKind::from_env_or_default();
-
-    // Create a Component reference for the worker component to subscribe to its events.
     let worker_component = drt.namespace(namespace)?.component(worker_component_name)?;
-
     let mut subscriber = EventSubscriber::for_component_with_transport(
         &worker_component,
         KV_EVENT_SUBJECT,
@@ -69,17 +63,13 @@ pub async fn spawn_event_subscriber(
                 Some(result) = subscriber.next() => {
                     let (_envelope, event) = match result {
                         Ok((envelope, event)) => (envelope, event),
-                        Err(e) => {
-                            tracing::warn!("Failed to receive RouterEvent from event plane: {e:?}");
+                        Err(err) => {
+                            tracing::warn!("Failed to receive RouterEvent from event plane: {err:?}");
                             continue;
                         }
                     };
 
                     let worker_id = event.worker_id;
-
-                    // Apply the event to the indexer that tracks this worker.
-                    // If the worker was discovered via MDC, it will be in the registry.
-                    // If it was registered via --workers CLI, the indexer also exists.
                     if let Some(indexer) = registry.get_indexer_for_worker(worker_id) {
                         indexer.apply_event(event).await;
                     } else {
