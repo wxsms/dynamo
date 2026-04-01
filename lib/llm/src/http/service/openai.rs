@@ -57,6 +57,7 @@ use crate::protocols::openai::{
     responses::{NvCreateResponse, NvResponse, ResponseParams, chat_completion_to_response},
     videos::{NvCreateVideoRequest, NvVideosResponse},
 };
+use crate::protocols::unified::UnifiedRequest;
 use crate::request_template::RequestTemplate;
 use crate::types::Annotated;
 use dynamo_runtime::logging::get_distributed_tracing_context;
@@ -1513,21 +1514,25 @@ async fn responses(
     let request_id = request.id().to_string();
     let (orig_request, context) = request.into_parts();
 
-    let mut chat_request: NvCreateChatCompletionRequest =
-        orig_request.try_into().map_err(|e: anyhow::Error| {
-            tracing::error!(
-                request_id,
-                error = %e,
-                "Failed to convert NvCreateResponse to NvCreateChatCompletionRequest",
-            );
-            let err_response = ErrorMessage::not_implemented_error(
-                VALIDATION_PREFIX.to_string()
-                    + "Failed to convert responses request: "
-                    + &e.to_string(),
-            );
-            inflight_guard.mark_error(extract_error_type_from_response(&err_response));
-            err_response
-        })?;
+    let unified_request: UnifiedRequest = orig_request.try_into().map_err(|e: anyhow::Error| {
+        tracing::error!(
+            request_id,
+            error = %e,
+            "Failed to convert NvCreateResponse to UnifiedRequest",
+        );
+        let err_response = ErrorMessage::not_implemented_error(
+            VALIDATION_PREFIX.to_string()
+                + "Failed to convert responses request: "
+                + &e.to_string(),
+        );
+        inflight_guard.mark_error(extract_error_type_from_response(&err_response));
+        err_response
+    })?;
+    // Extract the API context before consuming the UnifiedRequest — this
+    // carries Responses-specific fields (previous_response_id, store, etc.)
+    // that the stream converter needs for faithful response reconstruction.
+    let responses_ctx = unified_request.responses_context().cloned();
+    let mut chat_request = unified_request.into_inner();
 
     // Always use internal streaming for aggregation.
     // Set stream_options.include_usage so the backend sends token counts in the final chunk.
@@ -1577,7 +1582,10 @@ async fn responses(
         use crate::protocols::openai::responses::stream_converter::ResponseStreamConverter;
         use std::sync::atomic::{AtomicBool, Ordering};
 
-        let mut converter = ResponseStreamConverter::new(model.clone(), response_params);
+        let mut converter = match responses_ctx {
+            Some(ctx) => ResponseStreamConverter::with_context(model.clone(), response_params, ctx),
+            None => ResponseStreamConverter::new(model.clone(), response_params),
+        };
         let start_events = converter.emit_start_events();
 
         // Use std::sync::Mutex (not tokio) since process_chunk/emit_end_events are
@@ -1685,18 +1693,19 @@ async fn responses(
                 })?;
 
         // Convert NvCreateChatCompletionResponse --> NvResponse
-        let response: NvResponse = chat_completion_to_response(response, &response_params)
-            .map_err(|e| {
-                tracing::error!(
-                    request_id,
-                    "Failed to convert NvCreateChatCompletionResponse to NvResponse: {:?}",
-                    e
-                );
-                let err_response =
-                    ErrorMessage::internal_server_error("Failed to convert internal response");
-                inflight_guard.mark_error(extract_error_type_from_response(&err_response));
-                err_response
-            })?;
+        let response: NvResponse =
+            chat_completion_to_response(response, &response_params, responses_ctx.as_ref())
+                .map_err(|e| {
+                    tracing::error!(
+                        request_id,
+                        "Failed to convert NvCreateChatCompletionResponse to NvResponse: {:?}",
+                        e
+                    );
+                    let err_response =
+                        ErrorMessage::internal_server_error("Failed to convert internal response");
+                    inflight_guard.mark_error(extract_error_type_from_response(&err_response));
+                    err_response
+                })?;
 
         inflight_guard.mark_ok();
         // If the engine context was killed (client disconnect), the response was
