@@ -36,25 +36,21 @@ use std::time::Duration;
 
 use crate::http::service::metrics::{CancellationLabels, ErrorType, InflightGuard, Metrics};
 
-/// Environment variable name for configuring the backend stream inactivity timeout.
-///
-/// When set to a positive integer, `monitor_for_disconnects` will kill the engine context
-/// and drop the inflight guard if no SSE event is received from the backend within this
-/// many seconds. This acts as a circuit breaker for zombie workers that hold a live TCP
-/// connection but never produce output, which would otherwise permanently inflate the
-/// `dynamo_frontend_inflight_requests` gauge.
-///
-/// Set to `0` or leave unset to disable the timeout (default: disabled).
-pub const BACKEND_STREAM_TIMEOUT_ENV: &str = "DYN_HTTP_BACKEND_STREAM_TIMEOUT_SECS";
+use dynamo_runtime::config::environment_names::llm::DYN_HTTP_BACKEND_STREAM_TIMEOUT_SECS as BACKEND_STREAM_TIMEOUT_ENV;
 
 /// Read the backend stream inactivity timeout from the environment.
 /// Returns `None` if unset or zero (timeout disabled).
+///
+/// The HTTP-layer timeout uses a 2x multiplier over the configured value so that
+/// the request-plane timeout in `push_router` (which uses the raw value) always
+/// fires first and triggers `report_instance_down()` for worker quarantine.
+/// This layer is strictly a safety net for gauge cleanup.
 pub fn backend_stream_timeout() -> Option<Duration> {
     std::env::var(BACKEND_STREAM_TIMEOUT_ENV)
         .ok()
         .and_then(|s| s.parse::<u64>().ok())
         .filter(|&secs| secs > 0)
-        .map(Duration::from_secs)
+        .map(|secs| Duration::from_secs(secs.saturating_mul(2)))
 }
 
 #[derive(Clone, Copy)]
@@ -269,14 +265,14 @@ pub fn monitor_for_disconnects(
                         None => std::future::pending::<()>().await,
                     }
                 } => {
-                    inflight_guard.mark_error(ErrorType::Cancelled);
+                    inflight_guard.mark_error(ErrorType::ResponseTimeout);
                     stream_handle.disarm();
                     tracing::warn!(
                         request_id = %inflight_guard.request_id(),
                         model = %inflight_guard.model(),
                         endpoint = %inflight_guard.endpoint(),
                         request_type = %inflight_guard.request_type(),
-                        error_type = "cancelled",
+                        error_type = "response_timeout",
                         elapsed_ms = %inflight_guard.elapsed_ms(),
                         timeout_secs = ?inactivity_timeout.map(|d| d.as_secs()),
                         "backend stream inactivity timeout; killing engine context to release inflight gauge"
@@ -292,7 +288,7 @@ pub fn monitor_for_disconnects(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::http::service::metrics::Endpoint;
+    use crate::http::service::metrics::{Endpoint, ErrorType, RequestType, Status};
     use futures::StreamExt;
     use serial_test::serial;
 
@@ -378,15 +374,16 @@ mod tests {
     #[serial]
     async fn test_backend_inactivity_timeout_releases_inflight_gauge() {
         let model = "zombie-model";
+        // Config value "1" → HTTP-layer timeout is 2s (2x safety-net multiplier)
         let (metrics, guard, context, handle) = setup_test(model, "req-zombie", "1");
         assert_eq!(metrics.get_inflight_count(model), 1);
 
         let monitored = monitor_for_disconnects(hanging_stream(), context, guard, handle);
         tokio::pin!(monitored);
 
-        tokio::time::advance(Duration::from_secs(2)).await;
+        tokio::time::advance(Duration::from_secs(3)).await;
 
-        let completed = tokio::time::timeout(Duration::from_secs(1), async move {
+        let completed = tokio::time::timeout(Duration::from_secs(2), async move {
             while monitored.next().await.is_some() {}
         })
         .await;
@@ -399,6 +396,30 @@ mod tests {
             0,
             "inflight gauge leaked"
         );
+
+        // Verify the error was categorized as ResponseTimeout, not Cancelled
+        assert_eq!(
+            metrics.get_request_counter(
+                model,
+                &Endpoint::ChatCompletions,
+                &RequestType::Stream,
+                &Status::Error,
+                &ErrorType::ResponseTimeout,
+            ),
+            1,
+            "inactivity timeout should be recorded as ResponseTimeout"
+        );
+        assert_eq!(
+            metrics.get_request_counter(
+                model,
+                &Endpoint::ChatCompletions,
+                &RequestType::Stream,
+                &Status::Error,
+                &ErrorType::Cancelled,
+            ),
+            0,
+            "inactivity timeout should NOT be recorded as Cancelled"
+        );
     }
 
     /// Inactivity timeout resets on each token; only fires after a true gap.
@@ -407,7 +428,8 @@ mod tests {
     async fn test_inactivity_timeout_resets_on_each_token() {
         let model = "reset-model";
 
-        // Phase 1: tokens arrive every 2s with a 5s timeout — stream completes normally.
+        // Phase 1: tokens arrive every 2s with a 5s config (10s HTTP timeout after 2x multiplier)
+        // — stream completes normally because each token resets the timer.
         let (metrics, guard_1, ctx_1, handle_1) = setup_test(model, "phase1", "5");
         assert_eq!(metrics.get_inflight_count(model), 1);
 
@@ -449,7 +471,8 @@ mod tests {
         let monitored_2 = monitor_for_disconnects(hanging_stream(), ctx_2, guard_2, handle_2);
         tokio::pin!(monitored_2);
 
-        tokio::time::advance(Duration::from_secs(6)).await;
+        // Config "5" → HTTP timeout 10s (2x multiplier). Advance past it.
+        tokio::time::advance(Duration::from_secs(11)).await;
 
         let phase2 = tokio::time::timeout(Duration::from_secs(10), async {
             while monitored_2.next().await.is_some() {}
