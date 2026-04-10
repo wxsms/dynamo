@@ -665,6 +665,7 @@ pub(crate) async fn start_worker_kv_query_endpoint(
     let engine = Arc::new(WorkerKvQueryEngine {
         worker_id,
         local_indexer,
+        processing_semaphore: Semaphore::new(1),
     });
 
     let ingress = match Ingress::for_engine(engine) {
@@ -699,6 +700,9 @@ pub(crate) async fn start_worker_kv_query_endpoint(
 struct WorkerKvQueryEngine {
     worker_id: u64,
     local_indexer: Arc<LocalKvIndexer>,
+    /// Semaphore limiting concurrent recovery request processing to 1.
+    /// Prevents multiple routers from overwhelming the worker with heavy tree dump operations.
+    processing_semaphore: Semaphore,
 }
 
 #[async_trait]
@@ -729,6 +733,46 @@ impl AsyncEngine<SingleIn<WorkerKvQueryRequest>, ManyOut<WorkerKvQueryResponse>,
             ));
         }
 
+        // Check if this request can likely be served from buffer (fast path).
+        // If not, acquire semaphore for tree dump (heavy operation).
+        let likely_buffer_read = self
+            .local_indexer
+            .likely_served_from_buffer(request.start_event_id);
+
+        let _maybe_permit = if !likely_buffer_read {
+            // Acquire semaphore permit before processing tree dump.
+            // This prevents multiple heavy tree dump operations from running concurrently
+            let engine_ctx = ctx.context();
+            let permit = tokio::select! {
+                result = self.processing_semaphore.acquire() => {
+                    result.map_err(|_| anyhow::anyhow!("Worker KV query semaphore closed"))?
+                }
+                _ = futures::future::select(engine_ctx.stopped(), engine_ctx.killed()) => {
+                    tracing::warn!("Worker<>Router KV query request cancelled while waiting for semaphore");
+                    return Ok(ResponseStream::new(
+                        // this response will be dropped on the router side since the request was cancelled,
+                        // but we return it here to satisfy the function signature and provide some context in logs if it does get processed for some reason.
+                        Box::pin(stream::iter(vec![WorkerKvQueryResponse::Error(
+                            "Request cancelled by client".to_string(),
+                        )])),
+                        ctx.context(),
+                    ));
+                }
+            };
+            Some(permit)
+        } else {
+            // Fast buffer read - no semaphore needed
+            None
+        };
+
+        // Start slow-query logging only once the request is actively executing the slow path.
+        // Queued requests waiting on the semaphore should remain silent.
+        let _slow_query_guard = if !likely_buffer_read {
+            Some(SlowQueryGuard::spawn(self.worker_id))
+        } else {
+            None
+        };
+
         let response = self
             .local_indexer
             .get_events_in_id_range(request.start_event_id, request.end_event_id)
@@ -738,6 +782,32 @@ impl AsyncEngine<SingleIn<WorkerKvQueryRequest>, ManyOut<WorkerKvQueryResponse>,
             Box::pin(stream::iter(vec![response])),
             ctx.context(),
         ))
+    }
+}
+
+/// RAII guard that aborts a slow query logger task on drop.
+struct SlowQueryGuard(tokio::task::JoinHandle<()>);
+
+impl SlowQueryGuard {
+    fn spawn(worker_id: u64) -> Self {
+        Self(tokio::spawn(async move {
+            let mut elapsed_secs = 0u64;
+            loop {
+                tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+                elapsed_secs += 5;
+                tracing::warn!(
+                    worker_id,
+                    elapsed_secs,
+                    "Worker KV query still running - possible slow tree dump",
+                );
+            }
+        }))
+    }
+}
+
+impl Drop for SlowQueryGuard {
+    fn drop(&mut self) {
+        self.0.abort();
     }
 }
 
@@ -973,6 +1043,7 @@ mod tests {
         let engine = WorkerKvQueryEngine {
             worker_id,
             local_indexer,
+            processing_semaphore: Semaphore::new(1),
         };
 
         let request = WorkerKvQueryRequest {
