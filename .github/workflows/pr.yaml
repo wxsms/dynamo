@@ -239,7 +239,7 @@ jobs:
       framework: dynamo
       target: planner
       cuda_version: '[""]'
-      platform: 'linux/amd64'
+      platform: 'linux/amd64,linux/arm64'
       builder_name: ${{ needs.changed-files.outputs.builder_name }}
       build_timeout_minutes: 45
     secrets: inherit
