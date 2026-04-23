@@ -94,6 +94,7 @@ type DynamoGraphDeploymentReconciler struct {
 // +kubebuilder:rbac:groups=grove.io,resources=clustertopologies,verbs=get;list;watch
 // +kubebuilder:rbac:groups=scheduling.run.ai,resources=queues,verbs=get;list
 // +kubebuilder:rbac:groups=inference.networking.k8s.io,resources=inferencepools,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=networking.istio.io,resources=destinationrules,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=resource.k8s.io,resources=resourceclaimtemplates,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=resource.k8s.io,resources=deviceclasses,verbs=get;list;watch
 // +kubebuilder:rbac:groups=core,resources=pods,verbs=get;list;watch
@@ -1626,6 +1627,27 @@ func (r *DynamoGraphDeploymentReconciler) reconcileEPPResources(ctx context.Cont
 		return fmt.Errorf("failed to sync EPP InferencePool: %w", err)
 	}
 
+	// 3. Reconcile service mesh resources (e.g., Istio DestinationRule).
+	// Only attempt DestinationRule reconciliation when the Istio CRDs are
+	// present on the cluster; otherwise the API call would fail on every
+	// reconcile for Istio-less clusters.
+	if r.RuntimeConfig.IstioAvailable {
+		meshEnabled := r.Config.ServiceMesh.IsEnabled()
+		destinationRule := dynamo.GenerateEPPDestinationRule(eppServiceName, dgd.Namespace, r.Config.ServiceMesh)
+		_, _, err = commoncontroller.SyncResource(ctx, r, dgd, func(ctx context.Context) (*networkingv1beta1.DestinationRule, bool, error) {
+			return destinationRule, !meshEnabled, nil
+		})
+		if err != nil {
+			logger.Error(err, "Failed to sync EPP DestinationRule")
+			return fmt.Errorf("failed to sync EPP DestinationRule: %w", err)
+		}
+		if meshEnabled {
+			logger.Info("Synced EPP DestinationRule", "name", eppServiceName)
+		}
+	} else if r.Config.ServiceMesh.IsEnabled() {
+		logger.Error(nil, "Service mesh is enabled but networking.istio.io CRDs are not installed; skipping DestinationRule reconciliation")
+	}
+
 	logger.Info("Successfully reconciled EPP resources", "poolName", inferencePool.GetName())
 	return nil
 }
@@ -1679,6 +1701,14 @@ func (r *DynamoGraphDeploymentReconciler) SetupWithManager(mgr ctrl.Manager) err
 			GenericFunc: func(ge event.GenericEvent) bool { return true },
 		})).
 		WithEventFilter(commoncontroller.EphemeralDeploymentEventFilter(r.Config, r.RuntimeConfig))
+	if r.RuntimeConfig.IstioAvailable {
+		ctrlBuilder = ctrlBuilder.Owns(&networkingv1beta1.DestinationRule{}, builder.WithPredicates(predicate.Funcs{
+			CreateFunc:  func(ce event.CreateEvent) bool { return false },
+			DeleteFunc:  func(de event.DeleteEvent) bool { return true },
+			UpdateFunc:  func(de event.UpdateEvent) bool { return true },
+			GenericFunc: func(ge event.GenericEvent) bool { return false },
+		}))
+	}
 	if r.RuntimeConfig.GroveEnabled {
 		ctrlBuilder = ctrlBuilder.Owns(&grovev1alpha1.PodCliqueSet{}, builder.WithPredicates(predicate.Funcs{
 			// ignore creation cause we don't want to be called again after we create the pod gang set
