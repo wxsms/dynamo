@@ -1,22 +1,15 @@
-# SPDX-FileCopyrightText: Copyright (c) 2025-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-# DeepSeek-V4-Flash SGLang DynamoGraphDeployment
-# Aggregated mode (no P/D disagg), B200x4 TP4, MXFP4 MoE, EAGLE MTP 3/4
-#
-# Deploy:
-#   kubectl apply -f sglang-dgd.yaml -n <namespace>
-#
-# Test:
-#   kubectl port-forward -n <namespace> svc/sglang-dsv4-flash-frontend 8000:8000
-#   curl http://localhost:8000/v1/models
-#   curl http://localhost:8000/v1/chat/completions -H 'Content-Type: application/json' \
-#     -d '{"model":"deepseek-ai/DeepSeek-V4-Flash","messages":[{"role":"user","content":"Hello"}]}'
+# DeepSeek-V4-Pro SGLang DynamoGraphDeployment
+# Aggregated mode, B200x8 TP8, MXFP4 MoE
+# EAGLE disabled: crashes on long context (>18k tokens) and tool calling on B200 TP8
+# due to insufficient GPU memory headroom (4.23 GB/GPU with EAGLE vs 7.75 GB without)
 
 apiVersion: nvidia.com/v1alpha1
 kind: DynamoGraphDeployment
 metadata:
-  name: sglang-dsv4-flash
+  name: sglang-dsv4-pro
 spec:
   services:
     Frontend:
@@ -48,7 +41,7 @@ spec:
       replicas: 1
       resources:
         limits:
-          gpu: "4"
+          gpu: "8"
       volumeMounts:
         - name: shared-model-cache
           mountPoint: /models
@@ -72,22 +65,14 @@ spec:
             - dynamo.sglang
           args:
             - --model-path
-            - deepseek-ai/DeepSeek-V4-Flash
+            - deepseek-ai/DeepSeek-V4-Pro
             - --served-model-name
-            - deepseek-ai/DeepSeek-V4-Flash
+            - deepseek-ai/DeepSeek-V4-Pro
             - --trust-remote-code
             - --tp
-            - "4"
+            - "8"
             - --moe-runner-backend
             - flashinfer_mxfp4
-            - --speculative-algo
-            - EAGLE
-            - --speculative-num-steps
-            - "3"
-            - --speculative-eagle-topk
-            - "1"
-            - --speculative-num-draft-tokens
-            - "4"
             - --chunked-prefill-size
             - "4096"
             - --disable-flashinfer-autotune
