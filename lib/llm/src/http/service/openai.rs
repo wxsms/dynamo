@@ -43,6 +43,7 @@ use super::{
     service_v2,
 };
 use crate::engines::ValidateRequest;
+use crate::preprocessor::PRESERVE_OMITTED_MAX_TOKENS_CONTEXT_KEY;
 use crate::protocols::openai::chat_completions::aggregator::ChatCompletionAggregator;
 use crate::protocols::openai::nvext::apply_header_routing_overrides;
 use crate::protocols::openai::{
@@ -1669,8 +1670,9 @@ async fn responses(
     check_ready(&state)?;
 
     // Apply template values if present. When no template and no client-supplied
-    // max_output_tokens, leave it as None and let the underlying engine apply its
-    // own default — matching the chat completions path.
+    // max_output_tokens, leave it as None for response echoing and let the
+    // backend adapter compute the dynamic generation cap from its effective
+    // prompt length.
     if let Some(template) = template {
         if request.inner.model.as_deref().unwrap_or("").is_empty() {
             request.inner.model = Some(template.model.clone());
@@ -1767,7 +1769,10 @@ async fn responses(
             continuous_usage_stats: false,
         });
 
-    let request = context.map(|mut _req| chat_request);
+    let mut request = context.map(|mut _req| chat_request);
+    if response_params.max_output_tokens.is_none() {
+        request.insert(PRESERVE_OMITTED_MAX_TOKENS_CONTEXT_KEY, true);
+    }
 
     tracing::trace!("Getting chat completions engine for model: {}", model);
 
