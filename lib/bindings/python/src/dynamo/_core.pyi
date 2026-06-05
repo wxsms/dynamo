@@ -678,7 +678,6 @@ class ModelRuntimeConfig:
     max_num_batched_tokens: int | None
     tool_call_parser: str | None
     reasoning_parser: str | None
-    backend_framework: str | None
     exclude_tools_when_tool_choice_none: bool
     data_parallel_start_rank: int
     data_parallel_size: int
@@ -978,6 +977,8 @@ class KvEventPublisher:
         enable_local_indexer: bool = False,
         zmq_endpoint: Optional[str] = None,
         zmq_topic: Optional[str] = None,
+        batching_timeout_ms: Optional[int] = None,
+        image_token_id: Optional[int] = None,
     ) -> None:
         """
         Create a `KvEventPublisher` object.
@@ -2109,6 +2110,14 @@ async def unregister_model(
 
 def lora_name_to_id(lora_name: str) -> int:
     """Generate a deterministic integer ID from a LoRA name using blake3 hash."""
+    ...
+
+def resolve_routing_image_token_id(model_id: str, model_dir: str) -> Optional[int]:
+    """Routing-side image-placeholder token id for a model, resolved with the
+    same per-family logic the frontend's MM-aware KV routing uses. Returns None
+    when the model isn't in the MM-routing registry or its config can't be read.
+    Only present when the bindings are built with the ``mm-routing`` feature.
+    """
     ...
 
 class LoRADownloader:
