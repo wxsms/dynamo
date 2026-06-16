@@ -1728,7 +1728,7 @@ mod tests {
             dynamo_runtime::pipeline::RouterMode::RoundRobin,
             enforce_disagg,
         );
-        pr.mark_activated_for_test();
+        pr.mark_active_for_test();
         ws.prefill_router = Some(pr);
         ws
     }
@@ -1852,12 +1852,13 @@ mod tests {
             "model must be hidden after prefill death"
         );
 
-        // Prefill rejoins -> reactivate via the WorkerSet's PrefillRouter.
+        // Prefill rejoins -> mark the synthetic test router active again. A real
+        // PrefillRouter has an initialized inner router for reactivate() to reuse.
         if let Some(model) = mm.get_model("llama")
             && let Some(ws) = model.get_worker_set("decode-ns")
             && let Some(ref pr) = ws.prefill_router
         {
-            pr.reactivate();
+            pr.mark_active_for_test();
         } else {
             panic!("decode WorkerSet or prefill_router not found");
         }
