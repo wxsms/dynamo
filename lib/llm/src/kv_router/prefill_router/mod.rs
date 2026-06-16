@@ -49,10 +49,15 @@ pub struct PrefillRouter {
     router_mode: RouterMode,
     enforce_disagg: bool,
     prefill_load_estimator: Option<Arc<dyn PrefillLoadEstimator>>,
-    /// Model name used to look up the worker monitor for prefill client registration
+    /// Model name (used for logging / lifecycle messages).
     model_name: String,
-    /// Namespace used to look up the correct WorkerSet's worker monitor
+    /// Namespace (used for logging / lifecycle messages).
     namespace: String,
+    /// Worker monitor for this WorkerSet, handed in at construction (the monitor and
+    /// prefill router are created together in `watcher.rs`). On activation the prefill
+    /// `Client` is attached to it so the monitor publishes the overloaded set to the
+    /// prefill pool. `None` for a disabled router.
+    worker_monitor: Option<crate::discovery::KvWorkerMonitor>,
     is_eagle: bool,
     /// Set to true when all prefill workers die. Checked in generate() to prevent
     /// routing to dead workers. Cleared on reactivation when workers rejoin.
@@ -180,12 +185,29 @@ impl
 
                 // Pass the phase barrier to the spawned task. It is released after routing
                 // completes so worker recording finishes before phase changes to Decode.
-                self.spawn_prefill_task(
+                let admission_rx = self.spawn_prefill_task(
                     prefill_context,
                     Some(worker_id),
                     prefill_phase_barrier,
                     load_permit,
                 );
+
+                // Await the prefill dispatch (admission) result before starting
+                // decode. If the prefill was rejected (e.g. all eligible / the
+                // pinned prefill worker overloaded -> ResourceExhausted), surface
+                // the typed error now (503) instead of detaching and letting decode
+                // proceed against a prefill that never ran. Signalled at dispatch
+                // acceptance, so this does not gate on prefill output (which would
+                // deadlock the bootstrap KV-transfer rendezvous).
+                match admission_rx.await {
+                    Ok(Ok(())) => {}
+                    Ok(Err(error)) => return Err(error),
+                    Err(_) => {
+                        return Err(anyhow::anyhow!(
+                            "prefill task ended before signaling admission"
+                        ));
+                    }
+                }
 
                 (
                     Ok(PrefillOutcome::Bootstrap {
@@ -264,6 +286,7 @@ impl
                     prefill_context,
                     Some(resolved_wid),
                     None,
+                    None, // synchronous path: caller awaits the full completion
                 )
                 .await?;
                 drop(load_permit);
@@ -275,6 +298,13 @@ impl
                     }),
                     topology_constraints,
                 )
+            }
+            PrefillResolveDecision::Rejected(error) => {
+                // All eligible prefill workers are overloaded. Surface the typed
+                // (ResourceExhausted) rejection unchanged instead of falling back
+                // to the synchronous prefill path.
+                drop(prefill_phase_barrier);
+                return Err(error);
             }
             PrefillResolveDecision::Unavailable | PrefillResolveDecision::NotActivated => {
                 let topology_constraints =
@@ -301,6 +331,7 @@ impl
                     prefill_context,
                     preselected_worker,
                     None,
+                    None, // synchronous path: caller awaits the full completion
                 )
                 .await?;
                 let prefill_worker_id = completion

@@ -58,6 +58,12 @@ pub(super) enum PrefillResolveDecision {
     },
     Unavailable,
     NotActivated,
+    /// Worker selection failed with a typed rejection that must be surfaced to
+    /// the caller verbatim (e.g. `ResourceExhausted` when all eligible prefill
+    /// workers are overloaded). Unlike `Unavailable`, this must NOT fall back to
+    /// the synchronous prefill path — that path would re-enter the saturated
+    /// scheduler and lose the error type, masking backpressure as a 500.
+    Rejected(anyhow::Error),
     /// Bootstrap endpoint unavailable after a worker was selected.
     /// Carries the selected worker so the synchronous prefill path can commit
     /// that selection instead of re-entering router selection.
