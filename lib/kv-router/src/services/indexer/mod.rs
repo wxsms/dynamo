@@ -128,7 +128,10 @@ pub async fn run_server(config: IndexerConfig) -> anyhow::Result<()> {
         "Starting standalone KV cache indexer (HTTP-only mode)"
     );
 
-    let state = Arc::new(AppState::new(config.threads)?);
+    let state = Arc::new(AppState::new_with_cancel_token(
+        config.threads,
+        cancel_token.clone(),
+    )?);
     run_common(&config, state, cancel_token).await
 }
 
