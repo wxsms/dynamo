@@ -131,6 +131,18 @@ struct KvIndexerCli {
     /// Comma-separated peer URLs for P2P recovery (e.g. "http://host1:8090,http://host2:8091")
     #[arg(long)]
     peers: Option<String>,
+
+    /// Write access log (JSON lines) to this file
+    #[arg(long)]
+    access_log: Option<std::path::PathBuf>,
+
+    /// HTTP header name to extract trace-id from
+    #[arg(long, default_value = "x-trace-id")]
+    trace_id_header: String,
+
+    /// Use local timezone for access log timestamps (default: UTC)
+    #[arg(long)]
+    access_log_local_time: bool,
 }
 
 pub fn run_kv_indexer_cli<I, T>(args: I) -> anyhow::Result<()>
@@ -145,6 +157,12 @@ where
                 .chain(args.into_iter().map(Into::into)),
         )?;
 
+        let trace_id_header =
+            dynamo_kv_router::services::indexer::logging::parse_header_name(&cli.trace_id_header)
+                .map_err(|e| {
+                anyhow::anyhow!("invalid --trace-id-header '{}': {e}", cli.trace_id_header)
+            })?;
+
         init_standalone_logging();
 
         let rt = tokio::runtime::Runtime::new()?;
@@ -156,6 +174,9 @@ where
             model_name: cli.model_name,
             tenant_id: cli.tenant_id,
             peers: cli.peers,
+            access_log: cli.access_log,
+            trace_id_header,
+            access_log_local_time: cli.access_log_local_time,
         }))
     }
 
