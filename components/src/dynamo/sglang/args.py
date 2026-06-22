@@ -28,6 +28,7 @@ from dynamo.sglang._compat import enable_disjoint_streaming_output
 from dynamo.sglang.backend_args import DynamoSGLangArgGroup, DynamoSGLangConfig
 
 configure_dynamo_logging()
+PREFILL_DECODE_DISAGGREGATION_MODE = "pd"
 
 
 class DynamoConfig(DynamoRuntimeConfig, DynamoSGLangConfig):
@@ -110,6 +111,20 @@ def _has_cli_flag(args: list[str], flag: str) -> bool:
     return any(arg == flag or arg.startswith(f"{flag}=") for arg in args)
 
 
+def _get_last_cli_flag_value(args: list[str], flag: str) -> Optional[str]:
+    """Return the last CLI flag value from '--flag val' or '--flag=val' form."""
+    prefix = f"{flag}="
+    value = None
+    for idx, arg in enumerate(args):
+        if arg.startswith(prefix):
+            value = arg[len(prefix) :]
+        if arg == flag:
+            if idx + 1 >= len(args):
+                continue
+            value = args[idx + 1]
+    return value
+
+
 def _remove_cli_flag_and_value(args: list[str], flag: str) -> list[str]:
     """Remove a flag from CLI args, supporting '--flag val' and '--flag=val' forms."""
     updated: list[str] = []
@@ -125,6 +140,54 @@ def _remove_cli_flag_and_value(args: list[str], flag: str) -> list[str]:
             continue
         updated.append(arg)
     return updated
+
+
+def _set_cli_flag_value(args: list[str], flag: str, value: str) -> list[str]:
+    """Set a flag value once, preserving argparse's last-value-wins behavior."""
+    updated = _remove_cli_flag_and_value(args, flag)
+    updated.extend([flag, value])
+    return updated
+
+
+def _normalize_multimodal_disaggregation_args(
+    unknown: list[str], dynamo_config: "DynamoConfig"
+) -> list[str]:
+    """Map Dynamo's canonical multimodal EPD args to SGLang's current flags."""
+    disaggregation_mode = _get_last_cli_flag_value(unknown, "--disaggregation-mode")
+    if disaggregation_mode is None:
+        return unknown
+
+    requested_disaggregation_mode = disaggregation_mode
+    if disaggregation_mode in {
+        DisaggregationMode.AGGREGATED.value,
+        PREFILL_DECODE_DISAGGREGATION_MODE,
+    }:
+        unknown = _set_cli_flag_value(unknown, "--disaggregation-mode", "null")
+        disaggregation_mode = "null"
+
+    if disaggregation_mode == DisaggregationMode.ENCODE.value:
+        if not dynamo_config.enable_multimodal:
+            logging.warning(
+                "--disaggregation-mode=encode is only valid for SGLang "
+                "multimodal EPD; treating it as --enable-multimodal "
+                "--disaggregation-mode=encode for this release."
+            )
+            dynamo_config.enable_multimodal = True
+        dynamo_config.multimodal_encode_worker = True
+        return _remove_cli_flag_and_value(unknown, "--disaggregation-mode")
+
+    if (
+        dynamo_config.enable_multimodal
+        and not dynamo_config.multimodal_encode_worker
+        and not dynamo_config.multimodal_worker
+        and (
+            requested_disaggregation_mode == PREFILL_DECODE_DISAGGREGATION_MODE
+            or disaggregation_mode in {"prefill", "decode"}
+        )
+    ):
+        dynamo_config.multimodal_worker = True
+
+    return unknown
 
 
 def _load_disagg_config_section(config_path: str, config_key: str) -> dict[str, Any]:
@@ -243,6 +306,9 @@ async def parse_args(args: list[str]) -> Config:
     if "--config" in unknown:
         config_merger = ConfigArgumentMerger(parser=sglang_only_parser)
         unknown = config_merger.merge_config_with_args(unknown)
+
+    unknown = _normalize_multimodal_disaggregation_args(unknown, dynamo_config)
+    dynamo_config.validate_multimodal_topology()
 
     parsed_args = sglang_only_parser.parse_args(unknown)
 
