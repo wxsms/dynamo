@@ -22,6 +22,7 @@ use dynamo_runtime::{
 use crate::{
     discovery::ModelManager,
     protocols::common::{
+        extensions::{SESSION_AFFINITY_CONTEXT_KEY, SessionAffinityId},
         llm_backend::{LLMEngineOutput, PreprocessedRequest},
         preprocessor::{BootstrapInfo, PrefillResult, TraceLink},
         timing::{RequestPhase, RequestTracker},
@@ -126,6 +127,7 @@ pub struct PrefillRouter {
     cancel_token: CancellationToken,
     router_mode: RouterMode,
     enforce_disagg: bool,
+    session_affinity_ttl: Option<std::time::Duration>,
     prefill_load_estimator: Option<Arc<dyn PrefillLoadEstimator>>,
     /// Model name (used for logging / lifecycle messages).
     model_name: String,
@@ -176,6 +178,10 @@ impl
             return next.generate(context.map(|_| req)).await;
         }
 
+        let session_affinity = context
+            .get_optional::<SessionAffinityId>(SESSION_AFFINITY_CONTEXT_KEY)
+            .map_err(|message| anyhow::anyhow!("invalid session affinity context: {message}"))?;
+
         // Ensure tracker exists for routing decisions in disaggregated mode.
         // Create one if not provided by the upstream DeltaGenerator.
         if req.tracker.is_none() {
@@ -203,21 +209,23 @@ impl
         }
 
         let tracker = prefill_req.tracker.clone();
-        let prefill_context =
+        let mut prefill_context =
             Context::with_id_and_metadata(prefill_req, request_id.clone(), metadata.clone());
+        if let Some(session_affinity) = session_affinity {
+            prefill_context.insert(
+                SESSION_AFFINITY_CONTEXT_KEY,
+                session_affinity.as_ref().clone(),
+            );
+        }
         let router = self
             .prefill_router
             .get()
             .ok_or_else(|| anyhow::anyhow!(PrefillError::NotActivated))?;
         let prefill_result: Result<(PrefillOutcome, Option<RoutingConstraints>)> = async {
             let (prepared, prefill_stream) = router
-                .select_and_dispatch_prefill(
-                    prefill_context,
-                    preselected_worker,
-                    |request, worker_id, dp_rank| {
-                        self.prepare_prefill_dispatch(request, worker_id, dp_rank)
-                    },
-                )
+                .select_and_dispatch_prefill(prefill_context, |request, worker_id, dp_rank| {
+                    self.prepare_prefill_dispatch(request, worker_id, dp_rank)
+                })
                 .await?;
             let topology_constraints = prepared.topology_constraints;
             let outcome = if let Some(bootstrap_info) = prepared.bootstrap_info {
@@ -538,6 +546,7 @@ mod tests {
             Arc::new(crate::discovery::ModelManager::new()),
             RouterMode::RoundRobin,
             enforce_disagg,
+            None,
         )
     }
 
