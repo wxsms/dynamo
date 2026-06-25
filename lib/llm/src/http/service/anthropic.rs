@@ -32,7 +32,10 @@ use tracing::Instrument;
 use super::{
     RouteDoc,
     disconnect::{ConnectionHandle, create_connection_monitor, monitor_for_disconnects},
-    metrics::{CancellationLabels, Endpoint, process_response_and_observe_metrics},
+    metrics::{
+        CancellationLabels, Endpoint,
+        process_chat_response_and_observe_metrics as process_response_and_observe_metrics,
+    },
     service_v2,
 };
 use crate::protocols::anthropic::stream_converter::AnthropicStreamConverter;

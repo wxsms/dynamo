@@ -38,6 +38,8 @@ use super::{
     metadata::{attach_x_request_id, extract_metadata_from_http},
     metrics::{
         CancellationLabels, Endpoint, ErrorType, EventConverter,
+        process_chat_response_and_observe_metrics,
+        process_chat_response_using_event_converter_and_observe_metrics,
         process_response_and_observe_metrics,
         process_response_using_event_converter_and_observe_metrics,
     },
@@ -1788,7 +1790,7 @@ async fn chat_completions(
 
                 // Convert to SSE event (this consumes the response).
                 // EventConverter will detect `event: "error"` and convert to SSE error events.
-                let sse_result = process_response_using_event_converter_and_observe_metrics(
+                let sse_result = process_chat_response_using_event_converter_and_observe_metrics(
                     EventConverter::from(response),
                     &mut response_collector,
                     &mut http_queue_guard,
@@ -1830,7 +1832,7 @@ async fn chat_completions(
         let mut http_queue_guard = Some(http_queue_guard);
         let stream = stream_with_check.inspect(move |response| {
             // Calls observe_response() on each token - drops http_queue_guard on first token
-            process_response_and_observe_metrics(
+            process_chat_response_and_observe_metrics(
                 response,
                 &mut response_collector,
                 &mut http_queue_guard,
@@ -2225,7 +2227,7 @@ async fn responses(
             let mut saw_error = false;
 
             while let Some(annotated_chunk) = engine_stream.next().await {
-                process_response_and_observe_metrics(
+                process_chat_response_and_observe_metrics(
                     &annotated_chunk,
                     &mut response_collector,
                     &mut http_queue_guard,
@@ -2281,7 +2283,7 @@ async fn responses(
 
         let mut http_queue_guard = Some(http_queue_guard);
         let stream = stream_with_check.inspect(move |response| {
-            process_response_and_observe_metrics(
+            process_chat_response_and_observe_metrics(
                 response,
                 &mut response_collector,
                 &mut http_queue_guard,
@@ -4391,6 +4393,7 @@ mod tests {
                     usage: None,
                 },
                 nvext: None,
+                llm_metrics: None,
             }),
             id: Some("msg-1".to_string()),
             event: None,
@@ -4430,6 +4433,7 @@ mod tests {
                     usage: None,
                 },
                 nvext: None,
+                llm_metrics: None,
             }),
             id: Some("msg-1".to_string()),
             event: None,
@@ -4733,6 +4737,7 @@ mod tests {
                 service_tier: None,
             },
             nvext: None,
+            llm_metrics: None,
         };
         Annotated {
             id: Some("test-id".to_string()),
@@ -5366,6 +5371,7 @@ mod tests {
                 service_tier: None,
             },
             nvext: None,
+            llm_metrics: None,
         }
     }
 
