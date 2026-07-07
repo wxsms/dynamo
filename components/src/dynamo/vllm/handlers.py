@@ -996,6 +996,7 @@ class BaseWorkerHandler(ABC, Generic[RequestT, ResponseT]):
             enable_multimodal=enable_multimodal,
             enable_frontend_decoding=enable_frontend_decoding,
             embedding_loader=embedding_loader,
+            trust_remote_code=config.engine_args.trust_remote_code,
         )
 
         # Serialise concurrent scale_elastic_ep calls.  vLLM's elastic-EP
