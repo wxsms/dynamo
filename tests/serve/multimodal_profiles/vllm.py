@@ -113,6 +113,22 @@ VLLM_MULTIMODAL_PROFILES: list[MultimodalModelProfile] = [
                         payload=make_image_payload(["green"]),
                         extra_script_args=["--unified"],
                     ),
+                    MmCase(
+                        suffix="embedding_cache",
+                        payload=make_image_payload(
+                            ["green"],
+                            repeat_count=2,
+                            expected_log=[
+                                r"DynamoMultimodalEmbeddingCacheConnector "
+                                r"initialized: capacity_gb=1\.00"
+                            ],
+                        ),
+                        extra_script_args=[
+                            "--unified",
+                            "--multimodal-embedding-cache-capacity-gb",
+                            "1",
+                        ],
+                    ),
                 ],
             ),
             "agg_unified_video": TopologyConfig(
