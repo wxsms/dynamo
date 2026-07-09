@@ -905,6 +905,8 @@ class TestBenchmarkConfig:
         cfg = BenchmarkConfig()
         assert cfg.mode == "agg"
         assert cfg.prefill_isl_granularity == 16
+        assert cfg.prefill_kv_read_granularity == 1
+        assert cfg.prefill_batch_size_granularity == 1
         assert cfg.decode_length_granularity == 6
         assert cfg.decode_batch_size_granularity == 6
         assert cfg.warmup_iterations == 5
@@ -916,6 +918,8 @@ class TestBenchmarkConfig:
         cfg = BenchmarkConfig(
             mode="decode",
             prefill_isl_granularity=4,
+            prefill_kv_read_granularity=3,
+            prefill_batch_size_granularity=2,
             decode_length_granularity=3,
             decode_batch_size_granularity=3,
             warmup_iterations=2,
@@ -923,6 +927,8 @@ class TestBenchmarkConfig:
         )
         assert cfg.mode == "decode"
         assert cfg.prefill_isl_granularity == 4
+        assert cfg.prefill_kv_read_granularity == 3
+        assert cfg.prefill_batch_size_granularity == 2
 
     def test_benchmark_config_kwargs_unpack(self):
         from dynamo.vllm.instrumented_scheduler import BenchmarkConfig
@@ -932,6 +938,43 @@ class TestBenchmarkConfig:
         assert cfg.mode == "prefill"
         assert cfg.warmup_iterations == 1
         assert cfg.prefill_isl_granularity == 16
+        assert cfg.prefill_kv_read_granularity == 1
+        assert cfg.prefill_batch_size_granularity == 1
+
+    def test_prefill_axes_reach_scheduler_config(self, mock_vllm_cli):
+        mock_vllm_cli(
+            "--model",
+            "Qwen/Qwen3-0.6B",
+            "--benchmark-mode",
+            "prefill",
+            "--benchmark-prefill-kv-read-granularity",
+            "3",
+            "--benchmark-prefill-batch-granularity",
+            "2",
+        )
+
+        config = parse_args()
+
+        assert config.benchmark_prefill_kv_read_granularity == 3
+        assert config._benchmark_additional_config["prefill_kv_read_granularity"] == 3
+        assert config.benchmark_prefill_batch_granularity == 2
+        assert (
+            config._benchmark_additional_config["prefill_batch_size_granularity"] == 2
+        )
+
+    def test_prefill_kv_read_granularity_requires_prefix_caching(self, mock_vllm_cli):
+        mock_vllm_cli(
+            "--model",
+            "Qwen/Qwen3-0.6B",
+            "--benchmark-mode",
+            "prefill",
+            "--benchmark-prefill-kv-read-granularity",
+            "2",
+            "--no-enable-prefix-caching",
+        )
+
+        with pytest.raises(ValueError, match="requires prefix caching"):
+            parse_args()
 
 
 class TestBenchmarkGrid:
@@ -1169,6 +1212,8 @@ def _make_dynamo_config(**overrides):
         "multimodal_decode_worker": False,
         "fpm_trace": False,
         "benchmark_mode": None,
+        "benchmark_prefill_kv_read_granularity": 1,
+        "benchmark_prefill_batch_granularity": 1,
     }
     defaults.update(overrides)
     return SimpleNamespace(**defaults)
