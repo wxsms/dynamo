@@ -46,10 +46,6 @@ def run_select_service(args: List[str]) -> None:
     """Run the Dynamo selection service with the given arguments."""
     ...
 
-def run_sglang_sidecar(args: List[str]) -> None:
-    """Run the SGLang gRPC sidecar with the given arguments."""
-    ...
-
 # Any Python object that can be serialized to JSON (dict, list, str, int, etc.)
 JsonLike = Any
 
@@ -3268,6 +3264,11 @@ class SelectionServiceError(DynamoException):
 # ---------------------------------------------------------------------------
 
 class backend:
+    @staticmethod
+    def _run_sglang_sidecar(argv: Optional[List[str]] = None) -> None:
+        """Run the native SGLang sidecar with CLI-style arguments."""
+        ...
+
     class DisaggregationMode:
         # Mirrors `dynamo_backend_common::DisaggregationMode`. Engines consult
         # this on the WorkerConfig to switch their per-mode protocol behavior;
