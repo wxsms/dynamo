@@ -234,6 +234,133 @@ class TestBuildDynamoPreproc:  # FRONTEND.7 — worker subprocess preproc constr
             "json": {"type": "object"}
         }
 
+    def test_agent_hints_are_projected_to_routing(self):
+        result = _build_dynamo_preproc(
+            {
+                "model": "test",
+                "nvext": {
+                    "agent_hints": {
+                        "priority": 10,
+                        "strict_priority": 3,
+                        "osl": 128,
+                    }
+                },
+            },
+            prompt_token_ids=[1],
+            model_name="test",
+            eos_token_ids=None,
+        )
+
+        assert result["routing"] == {
+            "priority": 10,
+            "priority_jump": 10.0,
+            "strict_priority": 3,
+            "expected_output_tokens": 128,
+        }
+
+    def test_negative_priority_hint_preserves_backend_priority(self):
+        result = _build_dynamo_preproc(
+            {
+                "model": "test",
+                "nvext": {"agent_hints": {"priority": -5}},
+            },
+            prompt_token_ids=[1],
+            model_name="test",
+            eos_token_ids=None,
+        )
+
+        assert result["routing"] == {"priority": -5, "priority_jump": 0.0}
+
+    def test_existing_routing_overrides_agent_hint_projection(self):
+        result = _build_dynamo_preproc(
+            {
+                "model": "test",
+                "routing": {"priority_jump": 1.0, "strict_priority": 2},
+                "nvext": {
+                    "agent_hints": {
+                        "priority": 10,
+                        "strict_priority": 3,
+                        "osl": 128,
+                    }
+                },
+            },
+            prompt_token_ids=[1],
+            model_name="test",
+            eos_token_ids=None,
+        )
+
+        assert result["routing"] == {
+            "priority": 10,
+            "priority_jump": 1.0,
+            "strict_priority": 2,
+            "expected_output_tokens": 128,
+        }
+
+    def test_latency_sensitivity_projects_to_priority_jump_without_priority(self):
+        result = _build_dynamo_preproc(
+            {
+                "model": "test",
+                "nvext": {"agent_hints": {"latency_sensitivity": 2.5}},
+            },
+            prompt_token_ids=[1],
+            model_name="test",
+            eos_token_ids=None,
+        )
+
+        assert result["routing"] == {"priority_jump": 2.5}
+
+    @pytest.mark.parametrize(
+        "latency_sensitivity", [10**400, float("inf"), float("nan")]
+    )
+    def test_invalid_latency_sensitivity_hint_is_ignored(self, latency_sensitivity):
+        result = _build_dynamo_preproc(
+            {
+                "model": "test",
+                "nvext": {"agent_hints": {"latency_sensitivity": latency_sensitivity}},
+            },
+            prompt_token_ids=[1],
+            model_name="test",
+            eos_token_ids=None,
+        )
+
+        assert result["routing"] is None
+
+    @pytest.mark.parametrize("priority", [2**40, 10**400])
+    def test_out_of_range_priority_hint_is_ignored(self, priority):
+        result = _build_dynamo_preproc(
+            {
+                "model": "test",
+                "nvext": {"agent_hints": {"priority": priority}},
+            },
+            prompt_token_ids=[1],
+            model_name="test",
+            eos_token_ids=None,
+        )
+
+        assert result["routing"] is None
+
+    @pytest.mark.parametrize(
+        ("field", "value"),
+        [
+            ("strict_priority", -1),
+            ("strict_priority", 2**32),
+            ("osl", -1),
+            ("osl", 2**32),
+        ],
+    )
+    def test_out_of_range_u32_agent_hints_are_ignored(self, field, value):
+        result = _build_dynamo_preproc(
+            {
+                "model": "test",
+                "nvext": {"agent_hints": {"priority": 1, field: value}},
+            },
+            prompt_token_ids=[1],
+            model_name="test",
+            eos_token_ids=None,
+        )
+
+        assert result["routing"] == {"priority": 1, "priority_jump": 1.0}
+
     @pytest.mark.parametrize("require_reasoning", [False, True])
     def test_require_reasoning_passthrough(self, require_reasoning):
         """The Python chat processor preserves SGLang's reasoning gate."""
