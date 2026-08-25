@@ -36,11 +36,15 @@ use crate::{
     },
 };
 
+mod builtin;
 mod cancellation;
+mod occupancy;
 mod request_guard;
 mod selection;
 
+use builtin::BuiltinWorkerSelector;
 use cancellation::cancel_on_stop;
+use occupancy::HostedOccupancy;
 use request_guard::RequestGuard;
 use selection::{RoutingRequestParts, SelectionOptions, WorkerSelection};
 
@@ -131,33 +135,22 @@ where
     ResponseStream::new(wrapped_stream, stream_context)
 }
 
-/// First-party policies that need no KV-cache index.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum BuiltinRoutingPolicy {
-    RoundRobin,
-    Random,
+pub(crate) fn is_builtin_router_mode(mode: RouterMode) -> bool {
+    matches!(
+        mode,
+        RouterMode::RoundRobin
+            | RouterMode::Random
+            | RouterMode::PowerOfTwoChoices
+            | RouterMode::LeastLoaded
+    )
 }
 
-impl BuiltinRoutingPolicy {
-    pub fn from_router_mode(mode: RouterMode) -> Option<Self> {
-        match mode {
-            RouterMode::RoundRobin => Some(Self::RoundRobin),
-            RouterMode::Random => Some(Self::Random),
-            _ => None,
-        }
-    }
-
-    pub const fn required_worker_inputs(self) -> WorkerInputs {
-        WorkerInputs::NONE
-    }
-}
-
-enum RoutingPlane<Sel>
+enum RoutingPolicy<Sel>
 where
     Sel: WorkerSelector<ModelRuntimeConfig> + Send + 'static,
 {
     Kv(Arc<KvRouter<Sel>>),
-    Builtin(BuiltinRoutingPolicy),
+    Builtin(BuiltinWorkerSelector),
 }
 
 /// Owns request routing from worker selection through response cleanup.
@@ -170,9 +163,10 @@ where
     Sel: WorkerSelector<ModelRuntimeConfig> + Send + 'static,
 {
     inner: PushRouter<PreprocessedRequest, Annotated<LLMEngineOutput>>,
-    plane: RoutingPlane<Sel>,
+    policy: RoutingPolicy<Sel>,
     request_metrics: Arc<RouterRequestMetrics>,
     affinity: Option<AffinityCoordinator>,
+    hosted_occupancy: Option<HostedOccupancy>,
 }
 
 /// Compatibility name for the KV-only host used by existing callers.
@@ -210,37 +204,42 @@ where
 
         RoutingHost {
             inner,
-            plane: RoutingPlane::Kv(kv_router),
+            policy: RoutingPolicy::Kv(kv_router),
             request_metrics,
             affinity,
+            hosted_occupancy: None,
         }
     }
 
     pub(crate) fn new_builtin(
         inner: PushRouter<PreprocessedRequest, Annotated<LLMEngineOutput>>,
     ) -> Result<Self, Error> {
-        let policy =
-            BuiltinRoutingPolicy::from_router_mode(inner.router_mode()).ok_or_else(|| {
-                anyhow::anyhow!(
-                    "{:?} routing is not a stateless builtin policy",
-                    inner.router_mode()
-                )
-            })?;
-        debug_assert_eq!(policy.required_worker_inputs(), WorkerInputs::NONE);
+        let selector = BuiltinWorkerSelector::new(inner.router_mode()).ok_or_else(|| {
+            anyhow::anyhow!(
+                "{:?} routing is not a first-party builtin policy",
+                inner.router_mode()
+            )
+        })?;
+        let hosted_occupancy = selector
+            .required_worker_inputs()
+            .contains(WorkerInputs::OCCUPANCY)
+            .then(|| HostedOccupancy::new(&inner))
+            .transpose()?;
         let request_metrics =
             RouterRequestMetrics::from_component(inner.client.endpoint.component());
         Ok(Self {
             inner,
-            plane: RoutingPlane::Builtin(policy),
+            policy: RoutingPolicy::Builtin(selector),
             request_metrics,
             affinity: None,
+            hosted_occupancy,
         })
     }
 
     pub fn required_worker_inputs(&self) -> WorkerInputs {
-        match &self.plane {
-            RoutingPlane::Kv(chooser) => chooser.required_worker_inputs(),
-            RoutingPlane::Builtin(policy) => policy.required_worker_inputs(),
+        match &self.policy {
+            RoutingPolicy::Kv(chooser) => chooser.required_worker_inputs(),
+            RoutingPolicy::Builtin(selector) => selector.required_worker_inputs(),
         }
     }
 
@@ -251,16 +250,27 @@ where
     }
 
     pub(crate) fn kv_router_if_enabled(&self) -> Option<&Arc<KvRouter<Sel>>> {
-        match &self.plane {
-            RoutingPlane::Kv(chooser) => Some(chooser),
-            RoutingPlane::Builtin(_) => None,
+        match &self.policy {
+            RoutingPolicy::Kv(chooser) => Some(chooser),
+            RoutingPolicy::Builtin(_) => None,
         }
     }
 
     pub(crate) fn peek_next_worker(&self) -> Option<u64> {
-        match &self.plane {
-            RoutingPlane::Builtin(_) => self.inner.peek_next_worker(),
-            RoutingPlane::Kv(_) => None,
+        match &self.policy {
+            RoutingPolicy::Builtin(selector) => match &self.hosted_occupancy {
+                Some(occupancy) => occupancy.peek(&self.inner, selector),
+                None => self
+                    .inner
+                    .with_selectable_worker_ids(|ids| {
+                        selector.peek_worker(
+                            dynamo_kv_router::selector::WorkerSelectionInput::hosted(ids, None),
+                        )
+                    })
+                    .ok()
+                    .and_then(Result::ok),
+            },
+            RoutingPolicy::Kv(_) => None,
         }
     }
 
@@ -599,24 +609,64 @@ where
     where
         F: FnOnce(&mut PreprocessedRequest, AffinityTarget) -> Result<M, Error>,
     {
-        let RoutingPlane::Builtin(policy) = &self.plane else {
+        let RoutingPolicy::Builtin(selector) = &self.policy else {
             unreachable!("builtin dispatch called for KV routing")
         };
-        let policy = *policy;
-        debug_assert_eq!(policy.required_worker_inputs(), WorkerInputs::NONE);
 
         let phase_label = phase.to_string();
         let route_guard = StageGuard::new(STAGE_ROUTE, &phase_label);
         let explicit = explicit_target(&request, phase)?;
-        let initial_worker = match explicit {
-            Some(target) => {
-                self.inner.ensure_routable(target.worker_id)?;
-                target.worker_id
-            }
-            None => self.inner.select_stateless_worker()?,
+        let uses_occupancy = selector
+            .required_worker_inputs()
+            .contains(WorkerInputs::OCCUPANCY);
+        let (
+            initial_worker,
+            reserved_target,
+            occupancy_reservation,
+            candidate_count,
+            selected_occupancy,
+        ) = if uses_occupancy {
+            let occupancy = self
+                .hosted_occupancy
+                .as_ref()
+                .expect("OCCUPANCY policy must have hosted occupancy state");
+            let selection = occupancy.select_and_reserve(
+                &self.inner,
+                selector,
+                explicit.map(|target| target.worker_id),
+            )?;
+            (
+                selection.worker_id,
+                explicit,
+                Some(selection.reservation),
+                selection.candidate_count,
+                Some(selection.occupancy),
+            )
+        } else {
+            let worker_id = match explicit {
+                Some(target) => {
+                    self.inner.ensure_routable(target.worker_id)?;
+                    target.worker_id
+                }
+                None => {
+                    self.inner
+                        .with_selectable_worker_ids(|ids| {
+                            selector.select_worker(
+                                dynamo_kv_router::selector::WorkerSelectionInput::hosted(ids, None),
+                            )
+                        })??
+                        .worker
+                        .worker_id
+                }
+            };
+            (worker_id, None, None, 0, None)
         };
-        let mut guard: RequestGuard<Sel> =
-            RequestGuard::new_stateless(self.request_metrics.clone(), initial_worker, &request);
+        let mut guard: RequestGuard<Sel> = RequestGuard::new_builtin(
+            self.request_metrics.clone(),
+            initial_worker,
+            occupancy_reservation,
+            &request,
+        );
         let tracker = request.tracker.clone();
         let request_context = request.context().clone();
         self.request_metrics
@@ -627,6 +677,7 @@ where
         guard.start_dispatch(&phase_label);
         guard.record_prefill_start();
         let dispatch_result = if let Some(target) = explicit {
+            let target = reserved_target.unwrap_or(target);
             request.routing_mut().dp_rank = target.dp_rank;
             let metadata = match prepare(&mut request, target) {
                 Ok(metadata) => metadata,
@@ -641,7 +692,28 @@ where
             )
             .await
             .and_then(|result| result)
-            .map(|stream| (metadata, target, stream))
+            .map(|stream| (metadata, target, selected_occupancy, stream))
+        } else if uses_occupancy {
+            cancel_on_stop(
+                request_context.as_ref(),
+                self.inner.dispatch_preselected_prepared(
+                    request,
+                    initial_worker,
+                    |request, worker_id| {
+                        let occupancy = guard.retarget_worker(worker_id).ok_or_else(|| {
+                            anyhow::anyhow!("occupancy-aware request lost its reservation")
+                        })?;
+                        let target = AffinityTarget::worker(worker_id);
+                        request.routing_mut().dp_rank = None;
+                        prepare(request, target).map(|metadata| (metadata, target, occupancy))
+                    },
+                ),
+            )
+            .await
+            .and_then(|result| result)
+            .map(|((metadata, target, occupancy), stream)| {
+                (metadata, target, Some(occupancy), stream)
+            })
         } else {
             let target = AffinityTarget::new(initial_worker, None);
             request.routing_mut().dp_rank = None;
@@ -658,10 +730,10 @@ where
             )
             .await
             .and_then(|result| result)
-            .map(|stream| (metadata, target, stream))
+            .map(|stream| (metadata, target, None, stream))
         };
 
-        let (metadata, target, response_stream) = match dispatch_result {
+        let (metadata, target, final_occupancy, response_stream) = match dispatch_result {
             Ok(result) => result,
             Err(error) => {
                 let typed_error = error
@@ -672,6 +744,18 @@ where
                 return Err(error);
             }
         };
+        guard.retarget_worker(target.worker_id);
+        if uses_occupancy {
+            tracing::info!(
+                router_mode = selector.telemetry_name(),
+                worker_id = target.worker_id,
+                candidate_count,
+                occupancy =
+                    final_occupancy.expect("OCCUPANCY dispatch must retain its reservation"),
+                transport_fallback = target.worker_id != initial_worker,
+                "Selected worker"
+            );
+        }
         if let Some(tracker) = tracker {
             let worker_type = if tracker.phase() == RequestPhase::Prefill {
                 WORKER_TYPE_PREFILL
@@ -743,9 +827,9 @@ where
     where
         F: FnOnce(&mut PreprocessedRequest, AffinityTarget) -> Result<M, Error>,
     {
-        match &self.plane {
-            RoutingPlane::Kv(_) => self.select_and_dispatch_kv_prefill(request, prepare).await,
-            RoutingPlane::Builtin(_) => {
+        match &self.policy {
+            RoutingPolicy::Kv(_) => self.select_and_dispatch_kv_prefill(request, prepare).await,
+            RoutingPolicy::Builtin(_) => {
                 self.select_and_dispatch_builtin(request, RequestPhase::Prefill, prepare)
                     .await
             }
@@ -786,7 +870,7 @@ where
         &self,
         request: SingleIn<PreprocessedRequest>,
     ) -> Result<ManyOut<Annotated<LLMEngineOutput>>, Error> {
-        if matches!(&self.plane, RoutingPlane::Builtin(_)) {
+        if matches!(&self.policy, RoutingPolicy::Builtin(_)) {
             let phase = request
                 .tracker
                 .as_ref()
@@ -1014,19 +1098,19 @@ mod tests {
     }
 
     #[test]
-    fn stateless_builtin_policies_request_no_optional_capabilities() {
-        assert_eq!(
-            BuiltinRoutingPolicy::RoundRobin.required_worker_inputs(),
-            WorkerInputs::NONE
-        );
-        assert_eq!(
-            BuiltinRoutingPolicy::Random.required_worker_inputs(),
-            WorkerInputs::NONE
-        );
+    fn builtin_policies_declare_capabilities() {
+        for mode in [RouterMode::RoundRobin, RouterMode::Random] {
+            let selector = BuiltinWorkerSelector::new(mode).unwrap();
+            assert_eq!(selector.required_worker_inputs(), WorkerInputs::NONE);
+        }
+        for mode in [RouterMode::PowerOfTwoChoices, RouterMode::LeastLoaded] {
+            let selector = BuiltinWorkerSelector::new(mode).unwrap();
+            assert_eq!(selector.required_worker_inputs(), WorkerInputs::OCCUPANCY);
+        }
     }
 
     #[tokio::test]
-    async fn builtin_host_does_not_construct_kv_capabilities() {
+    async fn builtin_host_constructs_only_declared_capabilities() {
         let runtime = Runtime::from_current().unwrap();
         let distributed =
             DistributedRuntime::new(runtime.clone(), DistributedConfig::process_local())
@@ -1039,13 +1123,88 @@ mod tests {
             .unwrap()
             .endpoint("generate".to_string());
         let client = endpoint.client().await.unwrap();
-        let inner = PushRouter::from_client(client, RouterMode::RoundRobin)
+        let inner = PushRouter::from_client(client.clone(), RouterMode::RoundRobin)
             .await
             .unwrap();
         let host = RoutingHost::<DefaultWorkerSelector>::new_builtin(inner).unwrap();
 
         assert_eq!(host.required_worker_inputs(), WorkerInputs::NONE);
+        assert!(host.hosted_occupancy.is_none());
 
+        drop(host);
+
+        client.override_discovered_instances(vec![1, 2]);
+        client.override_instance_avail(vec![1, 2]);
+        let inner = PushRouter::from_client(client, RouterMode::PowerOfTwoChoices)
+            .await
+            .unwrap();
+        let host = RoutingHost::<DefaultWorkerSelector>::new_builtin(inner).unwrap();
+        let RoutingPolicy::Builtin(selector) = &host.policy else {
+            unreachable!()
+        };
+        assert_eq!(host.required_worker_inputs(), WorkerInputs::OCCUPANCY);
+        assert!(host.hosted_occupancy.is_some());
+        let selection = host
+            .hosted_occupancy
+            .as_ref()
+            .unwrap()
+            .select_and_reserve(&host.inner, selector, Some(1))
+            .unwrap();
+        assert_eq!(selection.worker_id, 1);
+        assert_eq!(selection.occupancy, 1);
+        assert_eq!(host.inner.occupancy_for_test(1), 1);
+        let mut guard: RequestGuard<DefaultWorkerSelector> = RequestGuard::new_builtin(
+            Arc::clone(&host.request_metrics),
+            selection.worker_id,
+            Some(selection.reservation),
+            &request(),
+        );
+        assert_eq!(guard.retarget_worker(1), Some(1));
+        guard.abort().await;
+        assert_eq!(host.inner.occupancy_for_test(1), 0);
+
+        drop(host);
+        runtime.shutdown();
+    }
+
+    #[tokio::test]
+    async fn builtin_occupancy_selection_uses_all_selectable_workers() {
+        let runtime = Runtime::from_current().unwrap();
+        let distributed =
+            DistributedRuntime::new(runtime.clone(), DistributedConfig::process_local())
+                .await
+                .unwrap();
+        let endpoint = distributed
+            .namespace("builtin-occupancy-workers".to_string())
+            .unwrap()
+            .component("workers".to_string())
+            .unwrap()
+            .endpoint("generate".to_string());
+        let client = endpoint.client().await.unwrap();
+        let inner = PushRouter::from_client(client.clone(), RouterMode::LeastLoaded)
+            .await
+            .unwrap();
+        client.override_discovered_instances(vec![1, 2]);
+        client.override_instance_avail(vec![1, 2]);
+        let host = RoutingHost::<DefaultWorkerSelector>::new_builtin(inner).unwrap();
+        let RoutingPolicy::Builtin(selector) = &host.policy else {
+            unreachable!()
+        };
+        let occupancy = host.hosted_occupancy.as_ref().unwrap();
+        let first = occupancy
+            .select_and_reserve(&host.inner, selector, Some(1))
+            .unwrap();
+        let second = occupancy
+            .select_and_reserve(&host.inner, selector, None)
+            .unwrap();
+
+        assert_eq!(first.worker_id, 1);
+        assert_eq!(second.worker_id, 2);
+        assert_eq!(second.candidate_count, 2);
+        assert_eq!(second.occupancy, 1);
+
+        drop(second);
+        drop(first);
         drop(host);
         runtime.shutdown();
     }
@@ -1307,14 +1466,15 @@ mod tests {
         assert_eq!(metrics.requests_started_total().get(), started_before + 3);
         assert_eq!(metrics.requests_total.get(), completed_before + 1);
 
-        let mut stateless_guard = RequestGuard::<DefaultWorkerSelector>::new_stateless(
+        let mut builtin_guard = RequestGuard::<DefaultWorkerSelector>::new_builtin(
             Arc::clone(&metrics),
             7,
+            None,
             &request(),
         );
         assert_eq!(metrics.requests_started_total().get(), started_before + 4);
-        stateless_guard.abort().await;
-        drop(stateless_guard);
+        builtin_guard.abort().await;
+        drop(builtin_guard);
         assert_eq!(metrics.requests_total.get(), completed_before + 1);
 
         drop(router);

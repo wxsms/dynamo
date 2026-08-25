@@ -26,6 +26,7 @@ use dynamo_kv_router::{
 use dynamo_runtime::{
     error::DynamoError,
     metrics::frontend_perf::{STAGE_DISPATCH, StageGuard},
+    pipeline::OccupancyReservation,
     protocols::annotated::Annotated,
 };
 
@@ -441,7 +442,13 @@ where
     Sel: WorkerSelector<ModelRuntimeConfig> + Send + 'static,
 {
     Kv(KvRequestCleanup<Sel>),
-    Stateless { worker_id: u64 },
+    Stateless {
+        worker_id: u64,
+    },
+    Occupancy {
+        worker_id: u64,
+        reservation: Option<OccupancyReservation>,
+    },
 }
 
 impl<Sel> RequestCleanup<Sel>
@@ -452,19 +459,45 @@ where
         match self {
             Self::Kv(cleanup) => cleanup.worker.worker_id,
             Self::Stateless { worker_id } => *worker_id,
+            Self::Occupancy { worker_id, .. } => *worker_id,
+        }
+    }
+
+    fn retarget_worker(&mut self, worker_id: u64) -> Option<u64> {
+        match self {
+            Self::Kv(_) => {
+                debug_assert!(false, "KV cleanup target cannot be retargeted");
+                None
+            }
+            Self::Stateless { worker_id: current } => {
+                *current = worker_id;
+                None
+            }
+            Self::Occupancy {
+                worker_id: current,
+                reservation,
+            } => {
+                let occupancy = reservation
+                    .as_mut()
+                    .map(|reservation| reservation.retarget(worker_id));
+                *current = worker_id;
+                occupancy
+            }
         }
     }
 
     fn context_id(&self) -> Option<&str> {
         match self {
             Self::Kv(cleanup) => Some(&cleanup.context_id),
-            Self::Stateless { .. } => None,
+            Self::Stateless { .. } | Self::Occupancy { .. } => None,
         }
     }
 
     async fn finish(&mut self) {
-        if let Self::Kv(cleanup) = self {
-            cleanup.finish().await;
+        match self {
+            Self::Kv(cleanup) => cleanup.finish().await,
+            Self::Occupancy { reservation, .. } => drop(reservation.take()),
+            Self::Stateless { .. } => {}
         }
     }
 }
@@ -582,16 +615,23 @@ where
         }
     }
 
-    pub(super) fn new_stateless(
+    pub(super) fn new_builtin(
         request_metrics: Arc<RouterRequestMetrics>,
         worker_id: u64,
+        occupancy_reservation: Option<OccupancyReservation>,
         request: &PreprocessedRequest,
     ) -> Self {
         request_metrics.requests_started_total().inc();
         Self {
-            cleanup: RequestCleanup::Stateless { worker_id },
+            cleanup: match occupancy_reservation {
+                Some(reservation) => RequestCleanup::Occupancy {
+                    worker_id,
+                    reservation: Some(reservation),
+                },
+                None => RequestCleanup::Stateless { worker_id },
+            },
             observability: RequestObservability::new(request.tracker.clone(), request_metrics),
-            // Stateless policies have no scheduler blocks to update. Emit one final ITL sample
+            // Builtin policies do not track scheduler blocks. Emit one final ITL sample
             // when the request completes rather than observing every streamed token.
             output_blocks: OutputBlockTracker::new(false, request.token_ids.len(), 1, None),
             approximate_lru: None,
@@ -600,6 +640,10 @@ where
             prefill_marked: false,
             migration_state: request.migration_state.clone(),
         }
+    }
+
+    pub(super) fn retarget_worker(&mut self, worker_id: u64) -> Option<u64> {
+        self.cleanup.retarget_worker(worker_id)
     }
 
     pub(super) fn record_migration_failure(&self, error: Option<DynamoError>) {
@@ -774,7 +818,7 @@ where
         if let Some(lease) = &self.approximate_lru {
             lease.release_now();
         }
-        // RequestCleanup drops immediately afterward and performs scheduler cleanup.
+        // RequestCleanup drops immediately afterward and performs resource cleanup.
     }
 }
 
