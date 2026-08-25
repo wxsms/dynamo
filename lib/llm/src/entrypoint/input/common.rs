@@ -14,7 +14,7 @@ use crate::{
     http::service::metrics::Metrics,
     kv_router::indexer::{preprocessed_multimodal_cache_keys, try_build_cache_indexer},
     kv_router::{
-        EncoderRouter, KvPushRouter, KvRouter, PrefillRouter, metrics::RouterRequestMetrics,
+        EncoderRouter, KvRouter, PrefillRouter, RoutingHost, metrics::RouterRequestMetrics,
     },
     lora::LoraFilteredRouter,
     migration::Migration,
@@ -192,6 +192,7 @@ where
                     model_manager.lora_load_estimator_for(endpoint_id),
                     router_mode,
                 )),
+                None if affinity.is_none() => Arc::new(RoutingHost::<Sel>::new_builtin(router)?),
                 None => Arc::new(SessionAffinityPushRouter::new_with_coordinator(
                     router, affinity, false,
                 )),
@@ -210,9 +211,7 @@ where
             let Some(chooser) = chooser else {
                 anyhow::bail!("RouterMode::KV requires KVRouter to not be null");
             };
-            Arc::new(KvPushRouter::new_with_coordinator(
-                router, chooser, affinity,
-            ))
+            Arc::new(RoutingHost::new_with_coordinator(router, chooser, affinity))
         }
     };
 
@@ -305,8 +304,8 @@ where
     .await?;
 
     // Eagerly register router request metrics so they appear as zeros even in
-    // non-KV modes (Direct, Random, RoundRobin) where KvPushRouter is never created.
-    // In KV mode, KvPushRouter::new() also calls from_component() (idempotent via
+    // non-KV modes (Direct, Random, RoundRobin) where RoutingHost is never created.
+    // In KV mode, RoutingHost::new() also calls from_component() (idempotent via
     // OnceLock), which covers the standalone router path as well.
     RouterRequestMetrics::from_component(client.endpoint.component());
 
