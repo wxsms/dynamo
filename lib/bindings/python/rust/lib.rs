@@ -178,6 +178,25 @@ fn register_core(m: &Bound<'_, PyModule>) -> PyResult<()> {
         rs::logging::init();
     }
 
+    // Size the runtime the bridge may build for itself.
+    //
+    // `DistributedRuntime::new` gives the bridge a configured runtime, but only when it gets
+    // there first, and often it does not — `dynamo.sglang` reaches the bridge earlier. Then
+    // `get_runtime()` builds a runtime from Tokio's own defaults: one worker per CPU and a
+    // 512-thread blocking ceiling, with DYN_RUNTIME_* ignored entirely.
+    //
+    // Setting the builder here means that runtime is sized correctly no matter who builds it.
+    // Module init is the earliest our code runs, so nothing can get in ahead of it.
+    match rs::RuntimeConfig::from_settings() {
+        Ok(config) => pyo3_async_runtimes::tokio::init(config.tokio_builder()),
+        // Not fatal: `Worker::ensure_process_runtime` reads the same settings and reports the
+        // error where there is context for it. Failing here would give a bare ImportError.
+        Err(e) => tracing::warn!(
+            "could not resolve the runtime configuration at import ({e}); if the async bridge \
+             has to build its own runtime it will fall back to Tokio's unbounded defaults"
+        ),
+    }
+
     m.add_function(wrap_pyfunction!(llm::kv::compute_block_hash_for_seq_py, m)?)?;
     m.add_function(wrap_pyfunction!(lora_name_to_id, m)?)?;
     #[cfg(feature = "mm-routing")]
@@ -1188,25 +1207,31 @@ impl DistributedRuntime {
         let event_transport_kind =
             resolve_event_transport_kind(&discovery_backend_config, event_plane.as_deref())?;
 
-        // Try to get existing runtime first, create new Worker only if needed
-        // This allows multiple DistributedRuntime instances to share the same tokio runtime
-        let runtime = rs::Worker::runtime_from_existing()
-            .or_else(|_| -> anyhow::Result<rs::Runtime> {
-                // No existing Worker, create new one
-                let worker = rs::Worker::from_settings()?;
+        // Give the bridge our runtime before anything spawns on it. `run_input` wraps the whole
+        // frontend in `future_into_py`, which spawns through `get_runtime()`, so this is the
+        // call that decides which runtime serves traffic.
+        let primary = rs::Worker::ensure_process_runtime().map_err(to_pyerr)?;
+        INIT.get_or_init(|| {
+            // An `Err` means the bridge already holds a runtime, and it never hands one back.
+            // That is a state to accept rather than a failure to report: `backend::Worker` may
+            // have registered this same `RT`, and `dynamo.sglang` reaches `get_runtime()`
+            // before we run. Refusing here broke every sglang test.
+            if pyo3_async_runtimes::tokio::init_with_runtime(primary).is_err()
+                && !std::ptr::eq(pyo3_async_runtimes::tokio::get_runtime(), primary)
+            {
+                // Both runtimes are sized from DYN_RUNTIME_*, since module init handed the
+                // bridge the same builder. The cost is that there are two of them, so the
+                // process carries twice the threads that configuration describes.
+                tracing::warn!(
+                    "the pyo3 async bridge built its own tokio runtime before this \
+                     DistributedRuntime was created, so the process now has two; both are sized \
+                     from DYN_RUNTIME_*, so the thread counts it describes are doubled"
+                );
+            }
+        });
 
-                // Initialize pyo3 bridge (only happens once per process)
-                INIT.get_or_try_init(|| -> anyhow::Result<()> {
-                    let primary = worker.tokio_runtime()?;
-                    pyo3_async_runtimes::tokio::init_with_runtime(primary).map_err(|e| {
-                        anyhow::anyhow!("failed to initialize pyo3 static runtime: {:?}", e)
-                    })?;
-                    Ok(())
-                })?;
-
-                Ok(worker.runtime().clone())
-            })
-            .map_err(to_pyerr)?;
+        // The bridge needed the tokio runtime; this wraps that same one in a dynamo `Runtime`.
+        let runtime = rs::Worker::runtime_from_existing().map_err(to_pyerr)?;
 
         let nats_enabled = request_plane.is_nats()
             || matches!(
