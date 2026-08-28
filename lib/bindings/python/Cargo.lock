@@ -1990,6 +1990,7 @@ dependencies = [
  "dynamo-runtime",
  "dynamo-sglang-sidecar",
  "dynamo-sidecar-common",
+ "dynamo-vllm-sidecar",
  "dynamo-worker-selection-policy-catalog",
  "futures",
  "once_cell",
@@ -2199,6 +2200,28 @@ name = "dynamo-truthy"
 version = "1.5.0"
 dependencies = [
  "anyhow",
+]
+
+[[package]]
+name = "dynamo-vllm-sidecar"
+version = "1.5.0"
+dependencies = [
+ "anyhow",
+ "async-stream",
+ "async-trait",
+ "clap",
+ "dynamo-backend-common",
+ "dynamo-sidecar-common",
+ "futures",
+ "prost 0.13.5",
+ "prost-types 0.13.5",
+ "serde_json",
+ "tokio",
+ "tokio-util",
+ "tonic 0.13.1",
+ "tonic-build 0.13.1",
+ "tonic-health",
+ "tracing",
 ]
 
 [[package]]
@@ -8074,6 +8097,7 @@ dependencies = [
  "futures-core",
  "pin-project-lite",
  "tokio",
+ "tokio-util",
 ]
 
 [[package]]
@@ -8293,6 +8317,18 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.118",
+]
+
+[[package]]
+name = "tonic-health"
+version = "0.13.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cb87334d340313fefa513b6e60794d44a86d5f039b523229c99c323e4e19ca4b"
+dependencies = [
+ "prost 0.13.5",
+ "tokio",
+ "tokio-stream",
+ "tonic 0.13.1",
 ]
 
 [[package]]
