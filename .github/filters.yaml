@@ -15,12 +15,12 @@
 #   frontend -> frontend EPP image build, dynamo build-test
 #   benchmarks -> dynamo build-test (runs tests/benchmarks/** pytest suite)
 #   efa      -> all framework EFA runtime image builds (changes to container/templates/aws.Dockerfile)
-#   examples -> recipe-check (Kustomize recipe generation and unit tests)
+#   examples -> recipe-check (Kustomize recipe generation and docs tests)
 #   sidecar  -> unified sidecar image build, publish, and compliance checks
 #   docs     -> fern docs lint, sync, and version release (docs/ directory)
 #
 # Filters for coverage only (no CI triggered):
-#   examples, ignore
+#   ignore
 
 all:
   - '**'
@@ -91,6 +91,7 @@ examples:
   - 'scripts/kustomize-matrix.py'
   - 'tests/test_generate_kustomize_openapi.py'
   - 'tests/test_kustomize_matrix.py'
+  - 'docs/tests/**'
   - 'deploy/operator/config/crd/bases/nvidia.com_dynamographdeployment.yaml'
   - 'deploy/operator/config/crd/bases/nvidia.com_dynamographdeploymentrequests.yaml'
 

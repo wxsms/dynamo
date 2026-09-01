@@ -21,7 +21,7 @@ When you open a PR, CI checks which files changed and runs only relevant jobs:
 | `efa` | EFA runtime image builds for vLLM, SGLang, TRT-LLM (`container/templates/aws.Dockerfile` change) |
 | `docs` | Docs Lint, Fern Configuration, Docs Website Composition, and Fern Broken Links checks; Fern preview or publish workflow |
 | `fern_components` | Parse custom MDX components (a step inside Fern Configuration Check) |
-| `examples` | Recipe Kustomize generation and unit checks |
+| `examples` | Recipe Kustomize generation and docs-artifact unit checks |
 | `ignore` | Nothing (classification only) |
 | `rust` | Rust pre merge checks |
 
