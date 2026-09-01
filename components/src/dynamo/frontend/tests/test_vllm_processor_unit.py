@@ -1487,8 +1487,8 @@ class TestRoutedEnginePath:
     async def test_genuine_internal_failure_is_still_internal(
         self, vllm_processor_module
     ):
-        # The mapping is narrow on purpose: anything without the discriminator
-        # keeps the existing internal-error behaviour.
+        """A real engine fault stays internal, and is sent as a tagged frame."""
+
         class _BrokenEngine(_FakeRoutedEngine):
             async def generate(self, preprocessed, **kwargs):
                 raise RuntimeError("CUDA out of memory")
@@ -1497,7 +1497,62 @@ class TestRoutedEnginePath:
 
         chunks = await _run_generate(processor, _base_preproc())
 
-        assert chunks[-1]["error"]["type"] == "internal_error"
+        # Yielded, not raised: an error without the discriminator is not a 4xx.
+        last = chunks[-1]
+        # It must also be tagged. An untagged dict fails to parse and becomes a 500.
+        assert last["_dynamo_annotated"] is True
+        assert last["event"] == "error"
+        assert "CUDA out of memory" in last["comment"][0]
+
+    @pytest.mark.asyncio
+    async def test_unregistered_choice_index_ends_the_stream(
+        self, vllm_processor_module
+    ):
+        """An unknown choice index ends the stream instead of reading on."""
+
+        class _WrongIndexOutputProcessor(_FakeOutputProcessor):
+            def process_outputs(self, outputs):
+                # Index 1 is never registered below, so the lookup misses.
+                return SimpleNamespace(
+                    reqs_to_abort=[],
+                    request_outputs=[
+                        SimpleNamespace(outputs=[SimpleNamespace(index=1)])
+                    ],
+                )
+
+        # Two frames: with `continue` the second one yields a second error.
+        routed_engine = _FakeRoutedEngine(
+            [
+                {"token_ids": [101], "index": 0, "finish_reason": None},
+                {"token_ids": [102], "index": 0, "finish_reason": None},
+            ]
+        )
+        processor = _make_processor(vllm_processor_module, routed_engine)
+        processor.output_processor = _WrongIndexOutputProcessor()
+        preproc = _base_preproc()
+        vllm_preproc = SimpleNamespace(
+            sampling_params=SimpleNamespace(n=1),
+            request_id="vllm-request",
+            external_req_id=None,
+        )
+
+        chunks = [
+            item
+            async for item in processor._generate_and_stream(
+                "request-id",
+                {"model": MODEL},
+                preproc,
+                preproc["token_ids"],
+                vllm_preproc,
+                {0: _FakePostProcessor()},
+                mm_routing_info=None,
+                context=None,
+            )
+        ]
+
+        assert len(chunks) == 1, f"stream continued after the error: {chunks}"
+        assert chunks[0]["event"] == "error"
+        assert "Invalid postprocessor choice index 1" in chunks[0]["comment"][0]
 
     @pytest.mark.asyncio
     async def test_routed_engine_gets_extra_args_metadata(self, vllm_processor_module):
