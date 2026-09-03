@@ -205,6 +205,9 @@ pub mod etcd {
     /// ETCD lease TTL in seconds (default: 10)
     pub const ETCD_LEASE_TTL: &str = "ETCD_LEASE_TTL";
 
+    /// Maximum time in seconds to retry the initial ETCD connection (default: 120)
+    pub const ETCD_STARTUP_CONNECT_TIMEOUT_SECONDS: &str = "ETCD_STARTUP_CONNECT_TIMEOUT_SECONDS";
+
     /// ETCD authentication environment variables
     pub mod auth {
         /// Username for ETCD authentication
@@ -939,6 +942,7 @@ mod tests {
             // ETCD
             etcd::ETCD_ENDPOINTS,
             etcd::ETCD_LEASE_TTL,
+            etcd::ETCD_STARTUP_CONNECT_TIMEOUT_SECONDS,
             etcd::auth::ETCD_AUTH_USERNAME,
             etcd::auth::ETCD_AUTH_PASSWORD,
             etcd::auth::ETCD_AUTH_CA,
