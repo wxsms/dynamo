@@ -2655,6 +2655,8 @@ dependencies = [
  "async-trait",
  "clap",
  "dynamo-backend-common",
+ "dynamo-llm",
+ "dynamo-runtime",
  "dynamo-sidecar-common",
  "futures",
  "prost-types 0.14.4",
