@@ -129,6 +129,16 @@ impl RadixTree {
         }
     }
 
+    pub(crate) fn contains_worker_block(
+        &self,
+        worker: WorkerWithDpRank,
+        block_hash: ExternalSequenceBlockHash,
+    ) -> bool {
+        self.lookup
+            .get(&worker)
+            .is_some_and(|lookup| lookup.contains_key(&block_hash))
+    }
+
     pub fn find_match_details(
         &self,
         sequence: Vec<LocalBlockHash>,
